@@ -9,6 +9,33 @@ use std::{
     num::NonZeroU64,
 };
 
+/// Takes a list of `RecordBatch`es and computes the number of distinct values for each string tag
+/// column across all batches, also known as "cardinality". Used to determine sort order.
+fn distinct_counts(batches: &[RecordBatch]) -> HashMap<String, NonZeroU64> {
+    let mut distinct_values_across_batches = HashMap::new();
+
+    for batch in batches {
+        for (column, distinct_values) in distinct_values(batch) {
+            let set = distinct_values_across_batches
+                .entry(column)
+                .or_insert_with(HashSet::new);
+            set.extend(distinct_values.into_iter());
+        }
+    }
+
+    distinct_values_across_batches
+        .into_iter()
+        .filter_map(|(column, distinct_values)| {
+            distinct_values
+                .len()
+                .try_into()
+                .ok()
+                .and_then(NonZeroU64::new)
+                .map(|count| (column, count))
+        })
+        .collect()
+}
+
 /// Takes a `RecordBatch` and returns a map of column names to the set of the distinct string
 /// values, for string tags only. Used to compute cardinality across multiple `RecordBatch`es.
 fn distinct_values(batch: &RecordBatch) -> HashMap<String, HashSet<String>> {
