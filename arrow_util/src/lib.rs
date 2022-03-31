@@ -4,6 +4,7 @@
 pub mod bitset;
 pub mod dictionary;
 pub mod display;
+pub mod distinct_count;
 pub mod optimize;
 pub mod string;
 pub mod util;

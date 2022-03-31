@@ -146,8 +146,10 @@ dependencies = [
  "chrono",
  "comfy-table",
  "hashbrown 0.12.0",
+ "mutable_batch_lp",
  "num-traits",
  "rand",
+ "schema",
  "snafu",
  "workspace-hack",
 ]
