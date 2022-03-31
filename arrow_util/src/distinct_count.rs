@@ -9,6 +9,13 @@ use std::{
     num::NonZeroU64,
 };
 
+/// Given a list of `RecordBatch`es, compute the cardinality of all data in all columns across all
+/// of the batches and return a sort key that lists the columns in order from lowest cardinality
+/// to highest cardinality, with the time column always last.
+fn compute_sort_key(batches: &[RecordBatch]) -> SortKey {
+    unimplemented!()
+}
+
 /// Takes a list of `RecordBatch`es and computes the number of distinct values for each string tag
 /// column across all batches, also known as "cardinality". Used to determine sort order.
 fn distinct_counts(batches: &[RecordBatch]) -> HashMap<String, NonZeroU64> {
@@ -109,5 +116,39 @@ mod tests {
         // Distinct count isn't computed for the time column or fields
         assert_eq!(distinct_values.get("time"), None);
         assert_eq!(distinct_values.get("val"), None);
+    }
+
+    #[test]
+    fn test_distinct_count() {}
+
+    #[test]
+    fn test_sort_key() {
+        // Across these three record batches:
+        // - `host` has 2 distinct values: "a", "b"
+        // - 'env' has 3 distinct values: "prod", "stage", "dev"
+        // host's 2 values appear in each record batch, so the distinct counts could be incorrectly
+        // aggregated together as 2 + 2 + 2 = 6. env's 3 values each occur in their own record
+        // batch, so they should always be aggregated as 3.
+        // host has the lower cardinality, so it should appear first in the sort key.
+        let lp1 = r#"
+            cpu,host=a,env=prod val=23 1
+            cpu,host=b,env=prod val=2 2
+        "#;
+        let rb1 = lp_to_record_batch(lp1);
+
+        let lp2 = r#"
+            cpu,host=a,env=stage val=23 3
+            cpu,host=b,env=stage val=2 4
+        "#;
+        let rb2 = lp_to_record_batch(lp2);
+
+        let lp3 = r#"
+            cpu,host=a,env=dev val=23 5
+            cpu,host=b,env=dev val=2 6
+        "#;
+        let rb3 = lp_to_record_batch(lp3);
+
+        let sort_key = compute_sort_key(&[rb1, rb2, rb3]);
+        assert_eq!(sort_key, SortKey::from_columns(["host", "env", "time"]));
     }
 }

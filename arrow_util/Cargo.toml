@@ -13,10 +13,10 @@ chrono = { version = "0.4", default-features = false }
 comfy-table = { version = "5.0", default-features = false }
 hashbrown = "0.12"
 num-traits = "0.2"
+schema = { path = "../schema" }
 snafu = "0.7"
 workspace-hack = { path = "../workspace-hack" }
 
 [dev-dependencies]
 mutable_batch_lp = { path = "../mutable_batch_lp" }
 rand = "0.8.3"
-schema = { path = "../schema" }
