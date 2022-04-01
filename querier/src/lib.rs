@@ -30,3 +30,6 @@ pub use flight::Client as QuerierFlightClient;
 pub use handler::{QuerierHandler, QuerierHandlerImpl};
 pub use namespace::QuerierNamespace;
 pub use server::QuerierServer;
+
+// for benchmarks
+pub use cache_system::backend::addressable_heap::AddressableHeap;

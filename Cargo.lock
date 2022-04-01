@@ -4273,6 +4273,7 @@ dependencies = [
  "backoff 0.1.0",
  "bytes",
  "client_util",
+ "criterion",
  "data_types2",
  "datafusion 0.1.0",
  "futures",
