@@ -2,6 +2,7 @@ use crate::{
     metadata::{DecodedIoxParquetMetaData, IoxMetadata, IoxParquetMetaData},
     storage::Storage,
 };
+use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use data_types::{
     partition_metadata::{Statistics, TableSummary},
     timestamp::{TimestampMinMax, TimestampRange},
@@ -10,8 +11,7 @@ use data_types2::ParquetFile;
 use datafusion::physical_plan::SendableRecordBatchStream;
 use iox_object_store::{IoxObjectStore, ParquetFilePath};
 use predicate::Predicate;
-use schema::selection::Selection;
-use schema::{Schema, TIME_COLUMN_NAME};
+use schema::{selection::Selection, Schema, TIME_COLUMN_NAME};
 use snafu::{ResultExt, Snafu};
 use std::{collections::BTreeSet, mem, sync::Arc};
 
@@ -268,19 +268,19 @@ fn extract_range(table_summary: &TableSummary) -> Option<TimestampMinMax> {
         None
     })
 }
-// Parquet file with decoded metadata.
-#[derive(Debug)]
-pub struct DecodedParquetFile {
-    pub parquet_file: ParquetFile,
+
+// Decoded parquet file metadata.
+#[derive(Debug, Clone)]
+pub struct DecodedParquetFileMetadata {
     pub parquet_metadata: Arc<IoxParquetMetaData>,
     pub decoded_metadata: DecodedIoxParquetMetaData,
     pub iox_metadata: IoxMetadata,
 }
 
-impl DecodedParquetFile {
-    pub fn new(parquet_file: ParquetFile) -> Self {
+impl DecodedParquetFileMetadata {
+    pub fn new(parquet_metadata_bytes: Vec<u8>) -> Self {
         let parquet_metadata = Arc::new(IoxParquetMetaData::from_thrift_bytes(
-            parquet_file.parquet_metadata.clone(),
+            parquet_metadata_bytes,
         ));
         let decoded_metadata = parquet_metadata.decode().expect("parquet metadata broken");
         let iox_metadata = decoded_metadata
@@ -288,7 +288,6 @@ impl DecodedParquetFile {
             .expect("cannot read IOx metadata from parquet MD");
 
         Self {
-            parquet_file,
             parquet_metadata,
             decoded_metadata,
             iox_metadata,
@@ -298,28 +297,41 @@ impl DecodedParquetFile {
 
 /// Create parquet chunk.
 pub fn new_parquet_chunk(
-    decoded_parquet_file: &DecodedParquetFile,
+    parquet_file: &ParquetFile,
     metrics: ChunkMetrics,
     iox_object_store: Arc<IoxObjectStore>,
 ) -> ParquetChunk {
-    let iox_metadata = &decoded_parquet_file.iox_metadata;
     let path = ParquetFilePath::new_new_gen(
-        iox_metadata.namespace_id,
-        iox_metadata.table_id,
-        iox_metadata.sequencer_id,
-        iox_metadata.partition_id,
-        iox_metadata.object_store_id,
+        parquet_file.namespace_id,
+        parquet_file.table_id,
+        parquet_file.sequencer_id,
+        parquet_file.partition_id,
+        parquet_file.object_store_id,
     );
 
-    let parquet_file = &decoded_parquet_file.parquet_file;
     let file_size_bytes = parquet_file.file_size_bytes as usize;
 
-    ParquetChunk::new(
-        &path,
+    // hack
+    let arrow_schema = ArrowSchemaRef::new(ArrowSchema::new(vec![]));
+    let schema: Schema = Arc::clone(&arrow_schema).try_into().unwrap();
+
+    // hack
+    let parquet_metadata = Arc::new(IoxParquetMetaData::from_thrift_bytes(vec![]));
+
+    ParquetChunk {
+        // hack
+        table_summary: Default::default(),
+        schema: Arc::new(schema),
+        timestamp_min_max: Some(TimestampMinMax::new(
+            parquet_file.min_time.get(),
+            parquet_file.max_time.get(),
+        )),
         iox_object_store,
+        path,
         file_size_bytes,
-        Arc::clone(&decoded_parquet_file.parquet_metadata),
+        // hack
+        parquet_metadata,
+        rows: parquet_file.row_count as usize,
         metrics,
-    )
-    .expect("cannot create chunk")
+    }
 }

@@ -4,7 +4,9 @@ use crate::handler::CompactorConfig;
 use crate::utils::GroupWithMinTimeAndSize;
 use crate::{
     query::QueryableParquetChunk,
-    utils::{CatalogUpdate, CompactedData, GroupWithTombstones, ParquetFileWithTombstone},
+    utils::{
+        CatalogUpdate, CompactedData, GroupWithTombstones, ParquetFileWithTombstoneAndMetadata,
+    },
 };
 use arrow::record_batch::RecordBatch;
 use backoff::{Backoff, BackoffConfig};
@@ -19,7 +21,10 @@ use iox_object_store::ParquetFilePath;
 use metric::{Attributes, Metric, U64Counter, U64Gauge, U64Histogram, U64HistogramOptions};
 use object_store::DynObjectStore;
 use observability_deps::tracing::{debug, info, warn};
-use parquet_file::metadata::{IoxMetadata, IoxParquetMetaData};
+use parquet_file::{
+    chunk::DecodedParquetFileMetadata,
+    metadata::{IoxMetadata, IoxParquetMetaData},
+};
 use query::{
     compute_sort_key_for_chunks, exec::ExecutorType, frontend::reorg::ReorgPlanner,
     util::compute_timenanosecond_min_max,
@@ -149,6 +154,11 @@ pub enum Error {
 
     #[snafu(display("Error querying for tombstones for a parquet file {}", source))]
     QueryingTombstones {
+        source: iox_catalog::interface::Error,
+    },
+
+    #[snafu(display("Error querying for parquet metadata for a parquet file {}", source))]
+    QueryingParquetMetadata {
         source: iox_catalog::interface::Error,
     },
 
@@ -533,7 +543,7 @@ impl Compactor {
     // mostly overlap with the most recent data only.
     async fn compact(
         &self,
-        overlapped_files: Vec<ParquetFileWithTombstone>,
+        overlapped_files: Vec<ParquetFileWithTombstoneAndMetadata>,
     ) -> Result<Vec<CompactedData>> {
         debug!("compact {} overlapped files", overlapped_files.len());
 
@@ -548,7 +558,7 @@ impl Compactor {
             return Ok(compacted);
         }
 
-        // Keep the fist IoxMetadata to reuse same IDs and names
+        // Keep info from the first parquet file to reuse IDs and names
         let iox_metadata = overlapped_files[0].iox_metadata();
 
         //  Collect all unique tombstone
@@ -591,16 +601,16 @@ impl Compactor {
 
         // Compute min & max sequence numbers and time
         // unwrap here will work becasue the len of the query_chunks already >= 1
-        let (head, tail) = query_chunks.split_first().unwrap();
-        let mut min_sequence_number = head.min_sequence_number();
-        let mut max_sequence_number = head.max_sequence_number();
-        let mut min_time = head.min_time();
-        let mut max_time = head.max_time();
+        let (head, tail) = overlapped_files.split_first().unwrap();
+        let mut min_sequence_number = head.data.min_sequence_number;
+        let mut max_sequence_number = head.data.max_sequence_number;
+        let mut min_time = head.data.min_time;
+        let mut max_time = head.data.max_time;
         for c in tail {
-            min_sequence_number = min(min_sequence_number, c.min_sequence_number());
-            max_sequence_number = max(max_sequence_number, c.max_sequence_number());
-            min_time = min(min_time, c.min_time());
-            max_time = max(max_time, c.max_time());
+            min_sequence_number = min(min_sequence_number, c.data.min_sequence_number);
+            max_sequence_number = max(max_sequence_number, c.data.max_sequence_number);
+            min_time = min(min_time, c.data.min_time);
+            max_time = max(max_time, c.data.max_time);
         }
 
         // Merge schema of the compacting chunks
@@ -615,7 +625,7 @@ impl Compactor {
         debug!("sort key: {:?}", sort_key);
 
         // Identify split time
-        let split_time = self.compute_split_time(min_time, max_time);
+        let split_time = self.compute_split_time(min_time.get(), max_time.get());
 
         // Build compact & split query plan
         let plan = ReorgPlanner::new()
@@ -931,7 +941,6 @@ impl Compactor {
         groups: Vec<Vec<ParquetFile>>,
     ) -> Result<Vec<GroupWithTombstones>> {
         let mut repo = self.catalog.repositories().await;
-        let tombstone_repo = repo.tombstones();
 
         let mut overlapped_file_with_tombstones_groups = Vec::with_capacity(groups.len());
 
@@ -966,7 +975,8 @@ impl Compactor {
 
             // Query the catalog for the tombstones that could be relevant to any parquet files
             // in this group.
-            let tombstones = tombstone_repo
+            let tombstones = repo
+                .tombstones()
                 .list_tombstones_for_time_range(
                     // We've previously grouped the parquet files by sequence and table IDs, so
                     // these values will be the same for all parquet files in the group.
@@ -979,30 +989,39 @@ impl Compactor {
                 .await
                 .context(QueryingTombstonesSnafu)?;
 
-            let parquet_files = parquet_files
-                .into_iter()
-                .map(|data| {
-                    // Filter the set of tombstones relevant to any file in the group to just those
-                    // relevant to this particular parquet file.
-                    let relevant_tombstones = tombstones
-                        .iter()
-                        .cloned()
-                        .filter(|t| {
-                            t.sequence_number > data.max_sequence_number
-                                && ((t.min_time <= data.min_time && t.max_time >= data.min_time)
-                                    || (t.min_time > data.min_time && t.min_time <= data.max_time))
-                        })
-                        .collect();
+            let mut parquet_files_with_tombstones_and_metadata =
+                Vec::with_capacity(parquet_files.len());
+            for data in parquet_files {
+                // Filter the set of tombstones relevant to any file in the group to just those
+                // relevant to this particular parquet file.
+                let relevant_tombstones = tombstones
+                    .iter()
+                    .cloned()
+                    .filter(|t| {
+                        t.sequence_number > data.max_sequence_number
+                            && ((t.min_time <= data.min_time && t.max_time >= data.min_time)
+                                || (t.min_time > data.min_time && t.min_time <= data.max_time))
+                    })
+                    .collect();
 
-                    ParquetFileWithTombstone {
+                // Fetch the parquet metadata from the catalog
+                let parquet_metadata = repo
+                    .parquet_files()
+                    .parquet_metadata(data.id)
+                    .await
+                    .context(QueryingParquetMetadataSnafu)?;
+
+                parquet_files_with_tombstones_and_metadata.push(
+                    ParquetFileWithTombstoneAndMetadata {
                         data: Arc::new(data),
                         tombstones: relevant_tombstones,
-                    }
-                })
-                .collect();
+                        decoded_metadata: DecodedParquetFileMetadata::new(parquet_metadata),
+                    },
+                )
+            }
 
             overlapped_file_with_tombstones_groups.push(GroupWithTombstones {
-                parquet_files,
+                parquet_files: parquet_files_with_tombstones_and_metadata,
                 tombstones,
             });
         }
@@ -1419,9 +1438,10 @@ mod tests {
 
         // ------------------------------------------------
         // File without tombstones
-        let mut pf = ParquetFileWithTombstone {
+        let mut pf = ParquetFileWithTombstoneAndMetadata {
             data: Arc::new(parquet_file),
             tombstones: vec![],
+            decoded_metadata: DecodedParquetFileMetadata::new(vec![]),
         };
         // Nothing compacted for one file without tombstones
         let result = compactor.compact(vec![pf.clone()]).await.unwrap();
@@ -1516,14 +1536,16 @@ mod tests {
             .with_sequencer(&sequencer)
             .create_tombstone(6, 6000, 12000, "tag1=VT")
             .await;
-        let pf1 = ParquetFileWithTombstone {
+        let pf1 = ParquetFileWithTombstoneAndMetadata {
             data: Arc::new(parquet_file1),
             tombstones: vec![tombstone.tombstone.clone()],
+            decoded_metadata: DecodedParquetFileMetadata::new(vec![]),
         };
         // File 2 without tombstones
-        let pf2 = ParquetFileWithTombstone {
+        let pf2 = ParquetFileWithTombstoneAndMetadata {
             data: Arc::new(parquet_file2),
             tombstones: vec![],
+            decoded_metadata: DecodedParquetFileMetadata::new(vec![]),
         };
 
         // Compact them
@@ -1623,19 +1645,22 @@ mod tests {
             .with_sequencer(&sequencer)
             .create_tombstone(6, 6000, 12000, "tag1=VT")
             .await;
-        let pf1 = ParquetFileWithTombstone {
+        let pf1 = ParquetFileWithTombstoneAndMetadata {
             data: Arc::new(parquet_file1),
             tombstones: vec![tombstone.tombstone.clone()],
+            decoded_metadata: DecodedParquetFileMetadata::new(vec![]),
         };
         // File 2 without tombstones
-        let pf2 = ParquetFileWithTombstone {
+        let pf2 = ParquetFileWithTombstoneAndMetadata {
             data: Arc::new(parquet_file2),
             tombstones: vec![],
+            decoded_metadata: DecodedParquetFileMetadata::new(vec![]),
         };
         // File 3 without tombstones
-        let pf3 = ParquetFileWithTombstone {
+        let pf3 = ParquetFileWithTombstoneAndMetadata {
             data: Arc::new(parquet_file3),
             tombstones: vec![],
+            decoded_metadata: DecodedParquetFileMetadata::new(vec![]),
         };
 
         // Compact them
@@ -1700,7 +1725,6 @@ mod tests {
             max_time: Timestamp::new(max_time),
             to_delete: None,
             file_size_bytes,
-            parquet_metadata: vec![],
             row_count: 0,
             compaction_level: INITIAL_COMPACTION_LEVEL, // level of file of new writes
             created_at: Timestamp::new(1),
@@ -1744,13 +1768,15 @@ mod tests {
             .clone();
 
         // Build 2 QueryableParquetChunks
-        let pt1 = ParquetFileWithTombstone {
+        let pt1 = ParquetFileWithTombstoneAndMetadata {
             data: Arc::new(pf1),
             tombstones: vec![],
+            decoded_metadata: DecodedParquetFileMetadata::new(vec![]),
         };
-        let pt2 = ParquetFileWithTombstone {
+        let pt2 = ParquetFileWithTombstoneAndMetadata {
             data: Arc::new(pf2),
             tombstones: vec![],
+            decoded_metadata: DecodedParquetFileMetadata::new(vec![]),
         };
         let pc1 = pt1.to_queryable_parquet_chunk(
             Arc::clone(&catalog.object_store),

@@ -864,7 +864,7 @@ impl IoxParquetMetaData {
 }
 
 /// Parquet metadata with IOx-specific wrapper, in decoded form.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DecodedIoxParquetMetaData {
     /// Low-level parquet metadata that stores all relevant information.
     md: ParquetMetaData,

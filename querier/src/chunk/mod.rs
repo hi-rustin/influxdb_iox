@@ -10,9 +10,7 @@ use futures::StreamExt;
 use iox_catalog::interface::Catalog;
 use iox_object_store::IoxObjectStore;
 use object_store::DynObjectStore;
-use parquet_file::chunk::{
-    new_parquet_chunk, ChunkMetrics as ParquetChunkMetrics, DecodedParquetFile, ParquetChunk,
-};
+use parquet_file::chunk::{new_parquet_chunk, ChunkMetrics as ParquetChunkMetrics, ParquetChunk};
 use query::{exec::IOxSessionContext, QueryChunk};
 use schema::{selection::Selection, sort::SortKey};
 use std::sync::Arc;
@@ -196,14 +194,11 @@ impl ParquetChunkAdapter {
     /// Create parquet chunk.
     ///
     /// Returns `None` if some data required to create this chunk is already gone from the catalog.
-    async fn new_parquet_chunk(
-        &self,
-        decoded_parquet_file: &DecodedParquetFile,
-    ) -> Option<ParquetChunk> {
+    async fn new_parquet_chunk(&self, parquet_file: &ParquetFile) -> Option<ParquetChunk> {
         let metrics = ParquetChunkMetrics::new(self.metric_registry.as_ref());
 
         Some(new_parquet_chunk(
-            decoded_parquet_file,
+            parquet_file,
             metrics,
             Arc::clone(&self.iox_object_store),
         ))
@@ -213,34 +208,26 @@ impl ParquetChunkAdapter {
     ///
     /// Returns `None` if some data required to create this chunk is already gone from the catalog.
     pub async fn new_querier_chunk(&self, parquet_file: ParquetFile) -> Option<QuerierChunk> {
-        let decoded_parquet_file = DecodedParquetFile::new(parquet_file);
-        let chunk = Arc::new(self.new_parquet_chunk(&decoded_parquet_file).await?);
+        let chunk = Arc::new(self.new_parquet_chunk(&parquet_file).await?);
 
-        let addr = self
-            .old_gen_chunk_addr(&decoded_parquet_file.parquet_file)
-            .await?;
-
-        let iox_metadata = &decoded_parquet_file.iox_metadata;
+        let addr = self.old_gen_chunk_addr(&parquet_file).await?;
 
         // Somewhat hacky workaround because NG has implicit chunk orders, use min sequence number and hope it doesn't
         // overflow u32. Order is non-zero, se we need to add 1.
-        let order = ChunkOrder::new(1 + iox_metadata.min_sequence_number.get() as u32)
+        let order = ChunkOrder::new(1 + parquet_file.min_sequence_number.get() as u32)
             .expect("cannot be zero");
 
         let meta = Arc::new(ChunkMeta {
             addr,
             order,
-            sort_key: iox_metadata.sort_key.clone(),
-            sequencer_id: iox_metadata.sequencer_id,
-            min_sequence_number: decoded_parquet_file.parquet_file.min_sequence_number,
-            max_sequence_number: decoded_parquet_file.parquet_file.max_sequence_number,
+            // TODO THIS IS ON THE PARTITION NOW
+            sort_key: None,
+            sequencer_id: parquet_file.sequencer_id,
+            min_sequence_number: parquet_file.min_sequence_number,
+            max_sequence_number: parquet_file.max_sequence_number,
         });
 
-        Some(QuerierChunk::new_parquet(
-            decoded_parquet_file.parquet_file.id,
-            chunk,
-            meta,
-        ))
+        Some(QuerierChunk::new_parquet(parquet_file.id, chunk, meta))
     }
 
     /// Get chunk addr for old gen.
