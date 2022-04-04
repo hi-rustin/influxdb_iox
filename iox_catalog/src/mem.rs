@@ -961,7 +961,6 @@ impl ParquetFileRepo for MemTxn {
             row_count,
             to_delete: None,
             file_size_bytes,
-            parquet_metadata,
             compaction_level,
             created_at,
         };
