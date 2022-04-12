@@ -7,6 +7,7 @@ mod database;
 mod mini_cluster;
 mod server_fixture;
 mod server_type;
+pub mod write_read;
 
 pub use client::*;
 pub use config::TestConfig;
