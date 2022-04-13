@@ -19,7 +19,7 @@ use iox_object_store::ParquetFilePath;
 use metric::{Attributes, Metric, U64Counter, U64Gauge, U64Histogram, U64HistogramOptions};
 use object_store::DynObjectStore;
 use observability_deps::tracing::{debug, info, warn};
-use parquet_file::metadata::{IoxMetadata, IoxParquetMetaData};
+use parquet_file2::metadata::{IoxMetadata, IoxParquetMetaData};
 use query::{
     compute_sort_key_for_chunks, exec::ExecutorType, frontend::reorg::ReorgPlanner,
     util::compute_timenanosecond_min_max,
@@ -131,7 +131,7 @@ pub enum Error {
 
     #[snafu(display("Error converting the parquet stream to bytes: {}", source))]
     ConvertingToBytes {
-        source: parquet_file::storage::Error,
+        source: parquet_file2::storage::Error,
     },
 
     #[snafu(display("Error writing to object store: {}", source))]
@@ -745,7 +745,7 @@ impl Compactor {
             IoxObjectStore::root_path_for(&*object_store, uuid::Uuid::new_v4()),
         ));
 
-        let data = parquet_file::storage::Storage::new(Arc::clone(&iox_object_store))
+        let data = parquet_file2::storage::Storage::new(Arc::clone(&iox_object_store))
             .parquet_bytes(record_batches, schema, metadata)
             .await
             .context(ConvertingToBytesSnafu)?;

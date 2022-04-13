@@ -54,6 +54,7 @@ members = [
     "panic_logging",
     "parquet_catalog",
     "parquet_file",
+    "parquet_file2",
     "persistence_windows",
     "predicate",
     "querier",

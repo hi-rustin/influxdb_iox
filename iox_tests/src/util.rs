@@ -18,7 +18,7 @@ use iox_object_store::{IoxObjectStore, ParquetFilePath};
 use mutable_batch::MutableBatch;
 use mutable_batch_lp::test_helpers::lp_to_mutable_batch;
 use object_store::{DynObjectStore, ObjectStoreImpl};
-use parquet_file::metadata::{IoxMetadata, IoxParquetMetaData};
+use parquet_file2::metadata::{IoxMetadata, IoxParquetMetaData};
 use query::exec::Executor;
 use schema::{
     selection::Selection,
@@ -584,7 +584,7 @@ async fn create_parquet_file(
 
     let schema = record_batch.schema();
 
-    let data = parquet_file::storage::Storage::new(Arc::clone(&iox_object_store))
+    let data = parquet_file2::storage::Storage::new(Arc::clone(&iox_object_store))
         .parquet_bytes(vec![record_batch], schema, metadata)
         .await
         .unwrap();

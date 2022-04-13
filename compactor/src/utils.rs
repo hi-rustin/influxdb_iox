@@ -8,7 +8,7 @@ use data_types2::{
 use iox_object_store::IoxObjectStore;
 use object_store::DynObjectStore;
 use observability_deps::tracing::*;
-use parquet_file::{
+use parquet_file2::{
     chunk::{new_parquet_chunk, ChunkMetrics, DecodedParquetFile},
     metadata::{IoxMetadata, IoxParquetMetaData},
 };

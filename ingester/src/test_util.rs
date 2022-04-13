@@ -16,7 +16,7 @@ use iox_catalog::{
     interface::{Catalog, INITIAL_COMPACTION_LEVEL},
     mem::MemCatalog,
 };
-use parquet_file::metadata::IoxMetadata;
+use parquet_file2::metadata::IoxMetadata;
 use query::test::{raw_data, TestChunk};
 use schema::sort::SortKey;
 use std::{collections::BTreeMap, sync::Arc};

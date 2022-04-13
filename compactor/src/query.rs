@@ -8,7 +8,7 @@ use data_types2::{
 };
 use datafusion::physical_plan::SendableRecordBatchStream;
 use observability_deps::tracing::trace;
-use parquet_file::chunk::ParquetChunk;
+use parquet_file2::chunk::ParquetChunk;
 use predicate::{Predicate, PredicateMatch};
 use query::{
     exec::{stringset::StringSet, IOxSessionContext},
@@ -21,14 +21,14 @@ use snafu::{ResultExt, Snafu};
 #[allow(missing_copy_implementations, missing_docs)]
 pub enum Error {
     #[snafu(display("Failed to read parquet: {}", source))]
-    ReadParquet { source: parquet_file::chunk::Error },
+    ReadParquet { source: parquet_file2::chunk::Error },
 
     #[snafu(display(
         "Error reading IOx Metadata from Parquet IoxParquetMetadata: {}",
         source
     ))]
     ReadParquetMeta {
-        source: parquet_file::metadata::Error,
+        source: parquet_file2::metadata::Error,
     },
 }
 

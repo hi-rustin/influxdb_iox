@@ -15,7 +15,7 @@ metric = { path = "../metric" }
 mutable_batch = { path = "../mutable_batch" }
 mutable_batch_lp = { path = "../mutable_batch_lp" }
 object_store = { path = "../object_store" }
-parquet_file = { path = "../parquet_file" }
+parquet_file2 = { path = "../parquet_file2" }
 query = { path = "../query" }
 schema = { path = "../schema" }
 time = { path = "../time" }

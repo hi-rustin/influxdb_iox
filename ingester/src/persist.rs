@@ -4,7 +4,7 @@ use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use iox_object_store::ParquetFilePath;
 use object_store::DynObjectStore;
-use parquet_file::metadata::{IoxMetadata, IoxParquetMetaData};
+use parquet_file2::metadata::{IoxMetadata, IoxParquetMetaData};
 use snafu::{ResultExt, Snafu};
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ use std::sync::Arc;
 pub enum Error {
     #[snafu(display("Error converting the parquet stream to bytes: {}", source))]
     ConvertingToBytes {
-        source: parquet_file::storage::Error,
+        source: parquet_file2::storage::Error,
     },
 
     #[snafu(display("Error writing to object store: {}", source))]
@@ -48,7 +48,7 @@ pub async fn persist(
         IoxObjectStore::root_path_for(&**object_store, uuid::Uuid::new_v4()),
     ));
 
-    let data = parquet_file::storage::Storage::new(Arc::clone(&iox_object_store))
+    let data = parquet_file2::storage::Storage::new(Arc::clone(&iox_object_store))
         .parquet_bytes(record_batches, schema, metadata)
         .await
         .context(ConvertingToBytesSnafu)?;

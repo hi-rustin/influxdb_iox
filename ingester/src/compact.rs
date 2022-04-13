@@ -8,7 +8,7 @@ use arrow::record_batch::RecordBatch;
 use data_types2::{NamespaceId, PartitionInfo};
 use datafusion::{error::DataFusionError, physical_plan::SendableRecordBatchStream};
 use iox_catalog::interface::INITIAL_COMPACTION_LEVEL;
-use parquet_file::metadata::IoxMetadata;
+use parquet_file2::metadata::IoxMetadata;
 use query::{
     exec::{Executor, ExecutorType},
     frontend::reorg::ReorgPlanner,

@@ -18,7 +18,7 @@ metric = { path = "../metric" }
 object_store = { path = "../object_store" }
 observability_deps = { path = "../observability_deps" }
 parking_lot = "0.12"
-parquet_file = { path = "../parquet_file" }
+parquet_file2 = { path = "../parquet_file2" }
 predicate = { path = "../predicate" }
 query = { path = "../query" }
 schema = { path = "../schema" }
