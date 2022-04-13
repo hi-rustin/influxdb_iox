@@ -1,3 +1,4 @@
+use arrow::record_batch::RecordBatch;
 use futures::future::BoxFuture;
 use http::StatusCode;
 
@@ -16,10 +17,52 @@ pub struct StepTest<'a> {
     steps: Vec<Step>,
 }
 
+/// The test state that is passed to custom steps
+pub struct StepTestState<'a> {
+    /// The mini cluster
+    cluster: &'a mut MiniCluster,
+
+    /// Tokens for all data written in WriteLineProtocol steps
+    write_tokens: Vec<String>,
+}
+
+impl<'a> StepTestState<'a> {
+    /// Get a reference to the step test state's cluster.
+    #[must_use]
+    pub fn cluster(&self) -> &&'a mut MiniCluster {
+        &self.cluster
+    }
+
+    /// Get a reference to the step test state's cluster.
+    #[must_use]
+    pub fn cluster_mut(&mut self) -> &mut &'a mut MiniCluster {
+        &mut self.cluster
+    }
+
+    /// Get a reference to the step test state's write tokens.
+    #[must_use]
+    pub fn write_tokens(&self) -> &[String] {
+        self.write_tokens.as_ref()
+    }
+}
+
 /// Function used for custom [`Step`]s.
 ///
 /// It is an async function that receives a mutable reference to [`MiniCluster`].
-pub type FCustom = Box<dyn for<'b> Fn(&'b mut MiniCluster) -> BoxFuture<'b, ()>>;
+///
+/// Example of creating one (note the `boxed()` call):
+/// ```
+/// use futures::FutureExt;
+/// use futures::future::BoxFuture;
+/// use test_helpers_end_to_end_ng::{MiniCluster, StepTestState};
+///
+/// let custom_function = Box::new(|cluster: &mut MiniCluster, state: &mut StepTestState| {
+///   async move {
+///     // Your potentially async code here
+///   }.boxed()
+/// });
+/// ```
+pub type FCustom = Box<dyn for<'b> Fn(&'b mut StepTestState) -> BoxFuture<'b, ()>>;
 
 /// Possible test steps that a test can perform
 pub enum Step {
@@ -42,7 +85,15 @@ pub enum Step {
         expected: Vec<&'static str>,
     },
 
-    /// A custom step that can be used to implement special cases that are only used once.
+    /// Run a query and run the validation function on the
+    /// results. The validation function is expected to panic if there is an error
+    VerifiedQuery {
+        sql: String,
+        verify: Box<dyn Fn(Vec<RecordBatch>)>,
+    },
+
+    /// A custom step that can be used to implement special cases that
+    /// are only used once.
     Custom(FCustom),
 }
 
@@ -57,10 +108,12 @@ impl<'a> StepTest<'a> {
     pub async fn run(self) {
         let Self { cluster, steps } = self;
 
-        // Tokens for all writes performed in this test
-        let mut write_tokens = vec![];
+        let mut state = StepTestState {
+            cluster,
+            write_tokens: vec![],
+        };
 
-        let ingester_grpc_connection = cluster.ingester().ingester_grpc_connection();
+        let ingester_grpc_connection = state.cluster.ingester().ingester_grpc_connection();
 
         for step in steps {
             match step {
@@ -69,29 +122,29 @@ impl<'a> StepTest<'a> {
                         "====Begin writing line protocol to v2 HTTP API:\n{}",
                         line_protocol
                     );
-                    let response = cluster.write_to_router(line_protocol).await;
+                    let response = state.cluster.write_to_router(line_protocol).await;
                     assert_eq!(response.status(), StatusCode::NO_CONTENT);
                     let write_token = get_write_token(&response);
                     println!("====Done writing line protocol, got token {}", write_token);
-                    write_tokens.push(write_token);
+                    state.write_tokens.push(write_token);
                 }
                 Step::WaitForReadable => {
                     println!("====Begin waiting for all write tokens to be readable");
-                    for write_token in &write_tokens {
+                    for write_token in &state.write_tokens {
                         wait_for_readable(write_token, ingester_grpc_connection.clone()).await;
                     }
                     println!("====Done waiting for all write tokens to be readable");
                 }
                 Step::WaitForPersisted => {
                     println!("====Begin waiting for all write tokens to be persisted");
-                    for write_token in &write_tokens {
+                    for write_token in &state.write_tokens {
                         wait_for_persisted(write_token, ingester_grpc_connection.clone()).await;
                     }
                     println!("====Done waiting for all write tokens to be persisted");
                 }
                 Step::AssertNotPersisted => {
                     println!("====Begin checking all tokens not persisted");
-                    for write_token in &write_tokens {
+                    for write_token in &state.write_tokens {
                         let persisted =
                             token_is_persisted(write_token, ingester_grpc_connection.clone()).await;
                         assert!(!persisted);
@@ -103,17 +156,28 @@ impl<'a> StepTest<'a> {
                     // run query
                     let batches = run_query(
                         sql,
-                        cluster.namespace(),
-                        cluster.querier().querier_grpc_connection(),
+                        state.cluster.namespace(),
+                        state.cluster.querier().querier_grpc_connection(),
                     )
                     .await;
-                    // convert String --> str
                     assert_batches_sorted_eq!(&expected, &batches);
+                    println!("====Done running");
+                }
+                Step::VerifiedQuery { sql, verify } => {
+                    println!("====Begin running verified query: {}", sql);
+                    // run query
+                    let batches = run_query(
+                        sql,
+                        state.cluster.namespace(),
+                        state.cluster.querier().querier_grpc_connection(),
+                    )
+                    .await;
+                    verify(batches);
                     println!("====Done running");
                 }
                 Step::Custom(f) => {
                     println!("====Begin custom step");
-                    f(cluster).await;
+                    f(&mut state).await;
                     println!("====Done custom step");
                 }
             }

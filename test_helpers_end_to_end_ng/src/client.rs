@@ -1,14 +1,16 @@
 //! Client helpers for writing end to end ng tests
+use std::collections::HashMap;
 use std::time::Duration;
 
 use arrow::record_batch::RecordBatch;
+use futures::{stream::FuturesUnordered, StreamExt};
 use http::Response;
 use hyper::{Body, Client, Request};
 
 use influxdb_iox_client::connection::Connection;
 use influxdb_iox_client::flight::generated_types::ReadInfo;
 use influxdb_iox_client::write_info::generated_types::{
-    GetWriteInfoResponse, KafkaPartitionStatus,
+    GetWriteInfoResponse, KafkaPartitionInfo, KafkaPartitionStatus,
 };
 
 /// Writes the line protocol to the write_base/api/v2/write endpoint (typically on the router)
@@ -58,6 +60,36 @@ pub async fn token_info(
     influxdb_iox_client::write_info::Client::new(ingester_connection)
         .get_write_info(write_token.as_ref())
         .await
+}
+
+/// returns a combined write info that contains the combined
+/// information across all ingester_connections for all the specified
+/// tokens
+pub async fn combined_token_info(
+    write_tokens: Vec<String>,
+    ingester_connections: Vec<Connection>,
+) -> Result<GetWriteInfoResponse, influxdb_iox_client::error::Error> {
+    let responses = write_tokens
+        .into_iter()
+        .flat_map(|write_token| {
+            ingester_connections
+                .clone()
+                .into_iter()
+                .map(move |ingester_connection| {
+                    token_info(write_token.clone(), ingester_connection)
+                })
+        })
+        .collect::<FuturesUnordered<_>>()
+        .collect::<Vec<_>>()
+        .await
+        // check for errors
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    println!("combining response: {:#?}", responses);
+
+    // merge them together
+    Ok(merge_responses(responses))
 }
 
 /// returns true if the write for this token is persisted, false if it
@@ -160,6 +192,49 @@ pub fn all_persisted(res: &GetWriteInfoResponse) -> bool {
     res.kafka_partition_infos
         .iter()
         .all(|info| matches!(info.status(), KafkaPartitionStatus::Persisted))
+}
+
+/// "merges" the partition information for write info responses so
+/// that the "most recent" information is returned
+fn merge_responses(
+    responses: impl IntoIterator<Item = GetWriteInfoResponse>,
+) -> GetWriteInfoResponse {
+    // make kafka partition id to status
+    let mut partition_infos: HashMap<_, KafkaPartitionInfo> = HashMap::new();
+
+    responses
+        .into_iter()
+        .flat_map(|res| res.kafka_partition_infos.into_iter())
+        .for_each(|info| {
+            partition_infos
+                .entry(info.kafka_partition_id)
+                .and_modify(|mut existing_info| merge_info(&mut existing_info, &info))
+                .or_insert(info);
+        });
+
+    let kafka_partition_infos = partition_infos
+        .into_iter()
+        .map(|(_kafka_partition_id, info)| info)
+        .collect();
+
+    GetWriteInfoResponse {
+        kafka_partition_infos,
+    }
+}
+
+fn merge_info(existing_info: &mut KafkaPartitionInfo, info: &KafkaPartitionInfo) {
+    println!("existing_info {:?}, info: {:?}", existing_info, info);
+    let new_status: KafkaPartitionStatus = match (existing_info.status(), info.status()) {
+        (KafkaPartitionStatus::Unknown, _) => info.status(),
+        // (Status
+        (_, KafkaPartitionStatus::Unknown) => existing_info.status(),
+        _ => panic!(
+            "unexpected status: existing_info {:?}, info: {:?}",
+            existing_info, info
+        ),
+    };
+
+    existing_info.status = new_status.into();
 }
 
 /// Runs a query using the flight API on the specified connection

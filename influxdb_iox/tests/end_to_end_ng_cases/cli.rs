@@ -1,7 +1,9 @@
 use assert_cmd::Command;
 use futures::FutureExt;
 use predicates::prelude::*;
-use test_helpers_end_to_end_ng::{maybe_skip_integration, MiniCluster, Step, StepTest, TestConfig};
+use test_helpers_end_to_end_ng::{
+    maybe_skip_integration, MiniCluster, Step, StepTest, StepTestState, TestConfig,
+};
 
 /// Tests CLI commands
 
@@ -30,7 +32,7 @@ async fn remote_partition() {
             // wait for partitions to be persisted
             Step::WaitForPersisted,
             // Run the 'remote partition' command
-            Step::Custom(Box::new(|cluster: &mut MiniCluster| {
+            Step::Custom(Box::new(|state: &mut StepTestState| {
                 async {
                     // Validate the output of the remote partittion CLI command
                     //
@@ -52,7 +54,7 @@ async fn remote_partition() {
                     Command::cargo_bin("influxdb_iox")
                         .unwrap()
                         .arg("-h")
-                        .arg(cluster.router2().router_grpc_base().as_ref())
+                        .arg(state.cluster().router2().router_grpc_base().as_ref())
                         .arg("remote")
                         .arg("partition")
                         .arg("show")
