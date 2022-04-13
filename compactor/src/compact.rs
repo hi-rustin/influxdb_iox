@@ -1,17 +1,16 @@
 //! Data Points for the lifecycle of the Compactor
 
-use crate::handler::CompactorConfig;
-use crate::utils::GroupWithMinTimeAndSize;
 use crate::{
     query::QueryableParquetChunk,
-    utils::{CatalogUpdate, CompactedData, GroupWithTombstones, ParquetFileWithTombstone},
+    handler::CompactorConfig,
+    utils::{CatalogUpdate, CompactedData, GroupWithMinTimeAndSize, GroupWithTombstones, ParquetFileWithTombstone},
 };
 use arrow::record_batch::RecordBatch;
 use backoff::{Backoff, BackoffConfig};
 use bytes::Bytes;
 use data_types2::{
-    ParquetFile, ParquetFileId, ParquetFileWithMetadata, PartitionId, SequencerId, TableId,
-    TablePartition, Timestamp, Tombstone, TombstoneId,
+    ParquetFile, ParquetFileId, PartitionId, PartitionInfo, SequencerId, TableId, TablePartition,
+    Timestamp, Tombstone, TombstoneId,
 };
 use datafusion::error::DataFusionError;
 use iox_catalog::interface::{Catalog, Transaction};
@@ -21,14 +20,13 @@ use object_store::DynObjectStore;
 use observability_deps::tracing::{debug, info, warn};
 use parquet_file2::metadata::{IoxMetadata, IoxParquetMetaData};
 use query::{
-    compute_sort_key_for_chunks, exec::ExecutorType, frontend::reorg::ReorgPlanner,
+    compute_sort_key_for_chunks, exec::{ExecutorType, Executor}, frontend::reorg::ReorgPlanner,
     util::compute_timenanosecond_min_max,
+    QueryChunk,
 };
-use query::{exec::Executor, QueryChunk};
-use snafu::{ensure, ResultExt, Snafu};
-use std::cmp::Ordering;
+use snafu::{ensure, ResultExt, Snafu, OptionExt};
 use std::{
-    cmp::{max, min},
+    cmp::{max, min, Ordering},
     collections::{BTreeMap, HashSet},
     ops::DerefMut,
     sync::Arc,
@@ -164,6 +162,14 @@ pub enum Error {
 
     #[snafu(display("Error joining compaction tasks: {}", source))]
     CompactionJoin { source: tokio::task::JoinError },
+
+    #[snafu(display("Error querying for partition info {}", source))]
+    QueryingPartitionInfo {
+        source: iox_catalog::interface::Error,
+    },
+
+    #[snafu(display("Partition info not found for PartitionId {}", partition_id))]
+    PartitionNotFound { partition_id: PartitionId },
 }
 
 /// A specialized `Error` for Compactor Data errors
@@ -371,12 +377,22 @@ impl Compactor {
         info!("compacting partition {}", partition_id);
         let start_time = self.time_provider.now();
 
+        let partition_info = self
+            .catalog
+            .repositories()
+            .await
+            .partitions()
+            .partition_info_by_id(partition_id)
+            .await
+            .context(QueryingPartitionInfoSnafu)?
+            .context(PartitionNotFoundSnafu { partition_id })?;
+
         let parquet_files = self
             .catalog
             .repositories()
             .await
             .parquet_files()
-            .list_by_partition_not_to_delete_with_metadata(partition_id)
+            .list_by_partition_not_to_delete(partition_id)
             .await
             .context(ListParquetFilesSnafu)?;
         if parquet_files.is_empty() {
@@ -417,7 +433,7 @@ impl Compactor {
             info!("compacting group of files: {:?}", original_parquet_file_ids);
 
             // compact
-            let split_compacted_files = self.compact(group.parquet_files).await?;
+            let split_compacted_files = self.compact(&partition_info, group.parquet_files).await?;
             debug!("compacted files");
 
             let mut catalog_update_info = Vec::with_capacity(split_compacted_files.len());
@@ -488,7 +504,7 @@ impl Compactor {
     fn group_small_contiguous_groups(
         mut file_groups: Vec<GroupWithMinTimeAndSize>,
         compaction_max_size_bytes: i64,
-    ) -> Vec<Vec<ParquetFileWithMetadata>> {
+    ) -> Vec<Vec<ParquetFile>> {
         let mut groups = Vec::with_capacity(file_groups.len());
         if file_groups.is_empty() {
             return groups;
@@ -540,6 +556,7 @@ impl Compactor {
     // mostly overlap with the most recent data only.
     async fn compact(
         &self,
+        partition_info: &PartitionInfo,
         overlapped_files: Vec<ParquetFileWithTombstone>,
     ) -> Result<Vec<CompactedData>> {
         debug!("compact {} overlapped files", overlapped_files.len());
@@ -555,8 +572,8 @@ impl Compactor {
             return Ok(compacted);
         }
 
-        // Save the parquet metadata for the first file to reuse IDs and names
-        let iox_metadata = overlapped_files[0].iox_metadata();
+        // Save the parquet file catalog metadata for the first file to reuse IDs and names
+        let parquet_file = &overlapped_files[0].data;
 
         //  Collect all unique tombstone
         let mut tombstone_map = overlapped_files[0].tombstones();
@@ -591,7 +608,7 @@ impl Compactor {
             .map(|f| {
                 f.to_queryable_parquet_chunk(
                     Arc::clone(&self.object_store),
-                    iox_metadata.table_name.to_string(),
+                    partition_info.table_name.clone(),
                 )
             })
             .collect();
@@ -696,13 +713,13 @@ impl Compactor {
             let meta = IoxMetadata {
                 object_store_id: Uuid::new_v4(),
                 creation_timestamp: self.time_provider.now(),
-                sequencer_id: iox_metadata.sequencer_id,
-                namespace_id: iox_metadata.namespace_id,
-                namespace_name: Arc::<str>::clone(&iox_metadata.namespace_name),
-                table_id: iox_metadata.table_id,
-                table_name: Arc::<str>::clone(&iox_metadata.table_name),
-                partition_id: iox_metadata.partition_id,
-                partition_key: Arc::<str>::clone(&iox_metadata.partition_key),
+                sequencer_id: parquet_file.sequencer_id,
+                namespace_id: parquet_file.namespace_id,
+                namespace_name: partition_info.namespace_name.clone().into(),
+                table_id: parquet_file.table_id,
+                table_name: partition_info.table_name.clone().into(),
+                partition_id: parquet_file.partition_id,
+                partition_key: partition_info.partition.partition_key.clone().into(),
                 time_of_first_write: Time::from_timestamp_nanos(min_time),
                 time_of_last_write: Time::from_timestamp_nanos(max_time),
                 min_sequence_number,
@@ -824,9 +841,7 @@ impl Compactor {
 
     /// Given a list of parquet files that come from the same Table Partition, group files together
     /// if their (min_time, max_time) ranges overlap. Does not preserve or guarantee any ordering.
-    fn overlapped_groups(
-        mut parquet_files: Vec<ParquetFileWithMetadata>,
-    ) -> Vec<GroupWithMinTimeAndSize> {
+    fn overlapped_groups(mut parquet_files: Vec<ParquetFile>) -> Vec<GroupWithMinTimeAndSize> {
         let mut groups = Vec::with_capacity(parquet_files.len());
 
         // While there are still files not in any group
@@ -958,7 +973,7 @@ impl Compactor {
 
     async fn add_tombstones_to_groups(
         &self,
-        groups: Vec<Vec<ParquetFileWithMetadata>>,
+        groups: Vec<Vec<ParquetFile>>,
     ) -> Result<Vec<GroupWithTombstones>> {
         let mut repo = self.catalog.repositories().await;
         let tombstone_repo = repo.tombstones();
@@ -1138,9 +1153,7 @@ mod tests {
             .await
             .unwrap();
         // should have 2 non-deleted level_0 files. The original file was marked deleted and not counted
-        let mut files = catalog
-            .list_by_table_not_to_delete_with_metadata(table.table.id)
-            .await;
+        let mut files = catalog.list_by_table_not_to_delete(table.table.id).await;
         assert_eq!(files.len(), 2);
         // 2 newly created level-1 files as the result of compaction
         assert_eq!((files[0].id.get(), files[0].compaction_level), (2, 1));
@@ -1342,9 +1355,7 @@ mod tests {
             .unwrap();
 
         // Should have 3 non-soft-deleted files: pf1 not compacted and stay, and 2 newly created after compacting pf2, pf3, pf4
-        let mut files = catalog
-            .list_by_table_not_to_delete_with_metadata(table.table.id)
-            .await;
+        let mut files = catalog.list_by_table_not_to_delete(table.table.id).await;
         assert_eq!(files.len(), 3);
         // pf1 upgraded to level 1
         assert_eq!((files[0].id.get(), files[0].compaction_level), (1, 1));
@@ -1703,7 +1714,7 @@ mod tests {
 
     /// A test utility function to make minimially-viable ParquetFile records with particular
     /// min/max times. Does not involve the catalog at all.
-    fn arbitrary_parquet_file(min_time: i64, max_time: i64) -> ParquetFileWithMetadata {
+    fn arbitrary_parquet_file(min_time: i64, max_time: i64) -> ParquetFile {
         arbitrary_parquet_file_with_size(min_time, max_time, 100)
     }
 
@@ -1711,8 +1722,8 @@ mod tests {
         min_time: i64,
         max_time: i64,
         file_size_bytes: i64,
-    ) -> ParquetFileWithMetadata {
-        ParquetFileWithMetadata {
+    ) -> ParquetFile {
+        ParquetFile {
             id: ParquetFileId::new(0),
             sequencer_id: SequencerId::new(0),
             namespace_id: NamespaceId::new(0),
@@ -2204,10 +2215,10 @@ mod tests {
         };
         let pf1 = txn.parquet_files().create(p1).await.unwrap();
         let pf1_metadata = txn.parquet_files().parquet_metadata(pf1.id).await.unwrap();
-        let pf1 = ParquetFileWithMetadata::new(pf1, pf1_metadata);
+        let pf1 = ParquetFile::new(pf1, pf1_metadata);
         let pf2 = txn.parquet_files().create(p2).await.unwrap();
         let pf2_metadata = txn.parquet_files().parquet_metadata(pf2.id).await.unwrap();
-        let pf2 = ParquetFileWithMetadata::new(pf2, pf2_metadata);
+        let pf2 = ParquetFile::new(pf2, pf2_metadata);
 
         let parquet_files = vec![pf1.clone(), pf2.clone()];
         let groups = vec![

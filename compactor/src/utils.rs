@@ -3,13 +3,13 @@
 use crate::query::QueryableParquetChunk;
 use arrow::record_batch::RecordBatch;
 use data_types2::{
-    ParquetFileId, ParquetFileParams, ParquetFileWithMetadata, Timestamp, Tombstone, TombstoneId,
+    ParquetFile, ParquetFileId, ParquetFileParams, Timestamp, Tombstone, TombstoneId,
 };
 use iox_object_store::IoxObjectStore;
 use object_store::DynObjectStore;
 use observability_deps::tracing::*;
 use parquet_file2::{
-    chunk::{new_parquet_chunk, ChunkMetrics, DecodedParquetFile},
+    chunk::{new_parquet_chunk, ChunkMetrics},
     metadata::{IoxMetadata, IoxParquetMetaData},
 };
 use std::{
@@ -38,7 +38,7 @@ impl GroupWithTombstones {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GroupWithMinTimeAndSize {
     /// Parquet files and their metadata
-    pub(crate) parquet_files: Vec<ParquetFileWithMetadata>,
+    pub(crate) parquet_files: Vec<ParquetFile>,
 
     /// min time of all parquet_files
     pub(crate) min_time: Timestamp,
@@ -51,7 +51,7 @@ pub struct GroupWithMinTimeAndSize {
 #[allow(missing_docs)]
 #[derive(Debug, Clone)]
 pub struct ParquetFileWithTombstone {
-    pub(crate) data: Arc<ParquetFileWithMetadata>,
+    pub(crate) data: Arc<ParquetFile>,
     pub(crate) tombstones: Vec<Tombstone>,
 }
 
@@ -90,23 +90,24 @@ impl ParquetFileWithTombstone {
         object_store: Arc<DynObjectStore>,
         table_name: String,
     ) -> QueryableParquetChunk {
-        let decoded_parquet_file = DecodedParquetFile::new((*self.data).clone());
         let root_path = IoxObjectStore::root_path_for(&*object_store, self.data.object_store_id);
         let iox_object_store = IoxObjectStore::existing(object_store, root_path);
         let parquet_chunk = new_parquet_chunk(
-            &decoded_parquet_file,
+            &self.data,
             ChunkMetrics::new_unregistered(), // TODO: need to add metrics
             Arc::new(iox_object_store),
         );
 
+        let parquet_file = self.data;
+
         debug!(
-            parquet_file_id=?decoded_parquet_file.parquet_file.id,
-            parquet_file_sequencer_id=?decoded_parquet_file.parquet_file.sequencer_id,
-            parquet_file_namespace_id=?decoded_parquet_file.parquet_file.namespace_id,
-            parquet_file_table_id=?decoded_parquet_file.parquet_file.table_id,
-            parquet_file_partition_id=?decoded_parquet_file.parquet_file.partition_id,
-            parquet_file_object_store_id=?decoded_parquet_file.parquet_file.object_store_id,
-            "built parquet chunk from metadata"
+            parquet_file_id=?parquet_file.id,
+            parquet_file_sequencer_id=?parquet_file.sequencer_id,
+            parquet_file_namespace_id=?parquet_file.namespace_id,
+            parquet_file_table_id=?parquet_file.table_id,
+            parquet_file_partition_id=?parquet_file.partition_id,
+            parquet_file_object_store_id=?parquet_file.object_store_id,
+            "built parquet chunk from catalog"
         );
 
         QueryableParquetChunk::new(
@@ -118,12 +119,6 @@ impl ParquetFileWithTombstone {
             self.data.min_time,
             self.data.max_time,
         )
-    }
-
-    /// Return iox metadata of the parquet file
-    pub fn iox_metadata(&self) -> IoxMetadata {
-        let decoded_parquet_file = DecodedParquetFile::new((*self.data).clone());
-        decoded_parquet_file.iox_metadata
     }
 }
 
