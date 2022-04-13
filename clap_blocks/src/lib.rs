@@ -4,6 +4,7 @@
 pub mod catalog_dsn;
 pub mod compactor;
 pub mod ingester;
+mod kafka_partitions;
 pub mod object_store;
 pub mod querier;
 pub mod run_config;

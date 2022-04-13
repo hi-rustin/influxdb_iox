@@ -232,8 +232,7 @@ impl Config {
         // parameters are redundant with ingesters
         let compactor_config = CompactorConfig {
             topic: write_buffer_config.topic().to_string(),
-            write_buffer_partition_range_start: ingester_config.write_buffer_partition_range_start,
-            write_buffer_partition_range_end: ingester_config.write_buffer_partition_range_end,
+            kafka_partition_config: ingester_config.kafka_partition_config.clone(),
             split_percentage: 90,
             max_concurrent_compaction_size_bytes: 100000,
             compaction_max_size_bytes: 100000,
@@ -281,15 +280,17 @@ pub async fn command(config: Config) -> Result<()> {
     } = config.specialize();
 
     // Ensure at least one topic is automatically created in all in one mode
-    write_buffer_config.set_auto_create_topics(Some(
-        write_buffer_config.auto_create_topics().unwrap_or_else(|| {
-            let default_config = NonZeroU32::new(1).unwrap();
-            info!(
-                ?default_config,
-                "Automatically configuring creation of a single topic"
-            );
-            default_config
-        }),
+    write_buffer_config.set_kafka_partition_count(Some(
+        write_buffer_config
+            .kafka_partition_count()
+            .unwrap_or_else(|| {
+                let kafka_partition_count = NonZeroU32::new(1).unwrap();
+                info!(
+                    ?kafka_partition_count,
+                    "Automatically configuring write buffer"
+                );
+                kafka_partition_count
+            }),
     ));
 
     // If you want this level of control, should be instatiating the

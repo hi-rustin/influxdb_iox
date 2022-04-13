@@ -133,9 +133,9 @@ pub async fn create_compactor_server_type(
     time_provider: Arc<dyn TimeProvider>,
     compactor_config: CompactorConfig,
 ) -> Result<Arc<dyn ServerType>> {
-    if compactor_config.write_buffer_partition_range_start
-        > compactor_config.write_buffer_partition_range_end
-    {
+    let kafka_partition_config = compactor_config.kafka_partition_config;
+
+    if kafka_partition_config.range_start() > kafka_partition_config.range_end() {
         return Err(Error::KafkaRange);
     }
 
@@ -146,8 +146,8 @@ pub async fn create_compactor_server_type(
         .await?
         .ok_or(Error::KafkaTopicNotFound(compactor_config.topic))?;
 
-    let kafka_partitions: Vec<_> = (compactor_config.write_buffer_partition_range_start
-        ..=compactor_config.write_buffer_partition_range_end)
+    let kafka_partitions: Vec<_> = (kafka_partition_config.range_start()
+        ..=kafka_partition_config.range_end())
         .map(KafkaPartition::new)
         .collect();
 

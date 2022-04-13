@@ -1,3 +1,5 @@
+use crate::kafka_partitions::KafkaPartitionConfig;
+
 /// CLI config for compactor
 #[derive(Debug, Clone, clap::Parser)]
 pub struct CompactorConfig {
@@ -10,19 +12,9 @@ pub struct CompactorConfig {
     )]
     pub topic: String,
 
-    /// Write buffer partition number to start (inclusive) range with
-    #[clap(
-        long = "--write-buffer-partition-range-start",
-        env = "INFLUXDB_IOX_WRITE_BUFFER_PARTITION_RANGE_START"
-    )]
-    pub write_buffer_partition_range_start: i32,
-
-    /// Write buffer partition number to end (inclusive) range with
-    #[clap(
-        long = "--write-buffer-partition-range-end",
-        env = "INFLUXDB_IOX_WRITE_BUFFER_PARTITION_RANGE_END"
-    )]
-    pub write_buffer_partition_range_end: i32,
+    /// Kafka Partition options
+    #[clap(flatten)]
+    pub kafka_partition_config: KafkaPartitionConfig,
 
     /// Percentage of least recent data we want to split to reduce compacting non-overlapped data
     /// Must be between 0 and 100. Default is 100, which won't split the resulting file.

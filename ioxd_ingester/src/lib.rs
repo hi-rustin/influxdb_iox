@@ -150,14 +150,13 @@ pub async fn create_ingester_server_type(
         .await?
         .ok_or_else(|| Error::KafkaTopicNotFound(write_buffer_config.topic().to_string()))?;
 
-    if ingester_config.write_buffer_partition_range_start
-        > ingester_config.write_buffer_partition_range_end
-    {
+    let kafka_partition_config = ingester_config.kafka_partition_config;
+    if kafka_partition_config.range_start() > kafka_partition_config.range_end() {
         return Err(Error::KafkaRange);
     }
 
-    let kafka_partitions: Vec<_> = (ingester_config.write_buffer_partition_range_start
-        ..=ingester_config.write_buffer_partition_range_end)
+    let kafka_partitions: Vec<_> = (kafka_partition_config.range_start()
+        ..=kafka_partition_config.range_end())
         .map(KafkaPartition::new)
         .collect();
 

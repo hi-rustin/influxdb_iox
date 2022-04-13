@@ -1,19 +1,11 @@
+use crate::kafka_partitions::KafkaPartitionConfig;
+
 /// CLI config for catalog ingest lifecycle
 #[derive(Debug, Clone, clap::Parser)]
 pub struct IngesterConfig {
-    /// Write buffer partition number to start (inclusive) range with
-    #[clap(
-        long = "--write-buffer-partition-range-start",
-        env = "INFLUXDB_IOX_WRITE_BUFFER_PARTITION_RANGE_START"
-    )]
-    pub write_buffer_partition_range_start: i32,
-
-    /// Write buffer partition number to end (inclusive) range with
-    #[clap(
-        long = "--write-buffer-partition-range-end",
-        env = "INFLUXDB_IOX_WRITE_BUFFER_PARTITION_RANGE_END"
-    )]
-    pub write_buffer_partition_range_end: i32,
+    /// Kafka Partition options
+    #[clap(flatten)]
+    pub kafka_partition_config: KafkaPartitionConfig,
 
     /// The ingester will continue to pull data and buffer it from Kafka
     /// as long as it is below this size. If it hits this size it will pause

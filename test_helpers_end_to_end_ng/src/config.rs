@@ -60,6 +60,7 @@ impl TestConfig {
     pub fn new_router2(dsn: impl Into<String>) -> Self {
         Self::new(ServerType::Router2, dsn, random_catalog_schema_name())
             .with_new_write_buffer()
+            .with_kafka_partition_count(1)
             .with_new_object_store()
     }
 
@@ -168,26 +169,41 @@ impl TestConfig {
         self.with_env(name, value)
     }
 
-    /// Configures a new write buffer
-    pub fn with_new_write_buffer(mut self) -> Self {
-        let n_sequencers = 1;
+    /// Configures a new write buffer. Call `with_kafka_partition_count` to auto create kafka partitions
+    fn with_new_write_buffer(self) -> Self {
         let tmpdir = TempDir::new().expect("can not create tmp dir");
         let write_buffer_string = tmpdir.path().display().to_string();
-        self.write_buffer_dir = Some(Arc::new(tmpdir));
 
-        self.with_env("INFLUXDB_IOX_WRITE_BUFFER_TYPE", "file")
-            .with_env(
-                "INFLUXDB_IOX_WRITE_BUFFER_AUTO_CREATE_TOPICS",
-                n_sequencers.to_string(),
-            )
+        self.with_write_buffer_dir(tmpdir)
+            .with_env("INFLUXDB_IOX_WRITE_BUFFER_TYPE", "file")
             .with_env("INFLUXDB_IOX_WRITE_BUFFER_ADDR", &write_buffer_string)
     }
 
+    /// Configures the write buffer to use the specified kafka partition count
+    fn with_kafka_partition_count(self, kafka_partition_count: usize) -> Self {
+        self.with_env(
+            // change to:
+            // "INFLUXDB_IOX_WRITE_BUFFER_KAFAKA_PARTITION_COUNT,
+            // https://github.com/influxdata/influxdb_iox/issues/4311
+            "INFLUXDB_IOX_WRITE_BUFFER_AUTO_CREATE_TOPICS",
+            kafka_partition_count.to_string(),
+        )
+    }
+
+    /// set the write buffer directory to tmpdir so it wont be list
+    fn with_write_buffer_dir(mut self, tmpdir: TempDir) -> Self {
+        self.write_buffer_dir = Some(Arc::new(tmpdir));
+        self
+    }
+
     /// Configures this TestConfig to use the same write buffer as other
-    pub fn with_existing_write_buffer(mut self, other: &TestConfig) -> Self {
+    fn with_existing_write_buffer(mut self, other: &TestConfig) -> Self {
         // copy the the directory, if any
         self.write_buffer_dir = other.write_buffer_dir.clone();
         self.copy_env("INFLUXDB_IOX_WRITE_BUFFER_TYPE", other)
+            // change to:
+            // "INFLUXDB_IOX_WRITE_BUFFER_KAFAKA_PARTITION_COUNT,
+            // https://github.com/influxdata/influxdb_iox/issues/4311
             .copy_env("INFLUXDB_IOX_WRITE_BUFFER_AUTO_CREATE_TOPICS", other)
             .copy_env("INFLUXDB_IOX_WRITE_BUFFER_ADDR", other)
     }
