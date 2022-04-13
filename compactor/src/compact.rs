@@ -1,16 +1,19 @@
 //! Data Points for the lifecycle of the Compactor
 
 use crate::{
-    query::QueryableParquetChunk,
     handler::CompactorConfig,
-    utils::{CatalogUpdate, CompactedData, GroupWithMinTimeAndSize, GroupWithTombstones, ParquetFileWithTombstone},
+    query::QueryableParquetChunk,
+    utils::{
+        CatalogUpdate, CompactedData, GroupWithMinTimeAndSize, GroupWithTombstones,
+        ParquetFileWithTombstone,
+    },
 };
 use arrow::record_batch::RecordBatch;
 use backoff::{Backoff, BackoffConfig};
 use bytes::Bytes;
 use data_types2::{
     ParquetFile, ParquetFileId, PartitionId, PartitionInfo, SequencerId, TableId, TablePartition,
-    Timestamp, Tombstone, TombstoneId,
+    TableSummary, Timestamp, Tombstone, TombstoneId,
 };
 use datafusion::error::DataFusionError;
 use iox_catalog::interface::{Catalog, Transaction};
@@ -20,11 +23,14 @@ use object_store::DynObjectStore;
 use observability_deps::tracing::{debug, info, warn};
 use parquet_file2::metadata::{IoxMetadata, IoxParquetMetaData};
 use query::{
-    compute_sort_key_for_chunks, exec::{ExecutorType, Executor}, frontend::reorg::ReorgPlanner,
+    compute_sort_key_for_chunks,
+    exec::{Executor, ExecutorType},
+    frontend::reorg::ReorgPlanner,
     util::compute_timenanosecond_min_max,
     QueryChunk,
 };
-use snafu::{ensure, ResultExt, Snafu, OptionExt};
+use schema::Schema;
+use snafu::{ensure, OptionExt, ResultExt, Snafu};
 use std::{
     cmp::{max, min, Ordering},
     collections::{BTreeMap, HashSet},
@@ -61,21 +67,13 @@ pub enum Error {
         partition_id_2: PartitionId,
     },
 
-    #[snafu(display(
-        "Cannot compact parquet files for table ID {} due to an internal error: {}",
-        table_id,
-        source
-    ))]
-    TableNotFound {
+    #[snafu(display("Error querying for table info {}", source))]
+    QueryingTableInfo {
         source: iox_catalog::interface::Error,
-        table_id: TableId,
     },
 
-    #[snafu(display(
-        "Cannot compact parquet files for an non-existing table ID {}",
-        table_id
-    ))]
-    TableNotExist { table_id: TableId },
+    #[snafu(display("Cannot find table ID {}", table_id))]
+    TableNotFound { table_id: TableId },
 
     #[snafu(display("Error building compact logical plan  {}", source))]
     CompactLogicalPlan {
@@ -377,16 +375,6 @@ impl Compactor {
         info!("compacting partition {}", partition_id);
         let start_time = self.time_provider.now();
 
-        let partition_info = self
-            .catalog
-            .repositories()
-            .await
-            .partitions()
-            .partition_info_by_id(partition_id)
-            .await
-            .context(QueryingPartitionInfoSnafu)?
-            .context(PartitionNotFoundSnafu { partition_id })?;
-
         let parquet_files = self
             .catalog
             .repositories()
@@ -398,6 +386,28 @@ impl Compactor {
         if parquet_files.is_empty() {
             return Ok(());
         }
+
+        let partition_info = self
+            .catalog
+            .repositories()
+            .await
+            .partitions()
+            .partition_info_by_id(partition_id)
+            .await
+            .context(QueryingPartitionInfoSnafu)?
+            .context(PartitionNotFoundSnafu { partition_id })?;
+
+        let table_id = partition_info.partition.table_id;
+        let table_info = self
+            .catalog
+            .repositories()
+            .await
+            .tables()
+            .table_info_by_id(table_id)
+            .await
+            .context(QueryingTableInfoSnafu)?
+            .context(TableNotFoundSnafu { table_id })?;
+
         let sequencer_id = parquet_files[0].sequencer_id;
         let file_count = parquet_files.len();
 
@@ -433,7 +443,14 @@ impl Compactor {
             info!("compacting group of files: {:?}", original_parquet_file_ids);
 
             // compact
-            let split_compacted_files = self.compact(&partition_info, group.parquet_files).await?;
+            let split_compacted_files = self
+                .compact(
+                    &partition_info,
+                    Arc::clone(&table_info.summary),
+                    Arc::clone(&table_info.schema),
+                    group.parquet_files,
+                )
+                .await?;
             debug!("compacted files");
 
             let mut catalog_update_info = Vec::with_capacity(split_compacted_files.len());
@@ -557,6 +574,8 @@ impl Compactor {
     async fn compact(
         &self,
         partition_info: &PartitionInfo,
+        table_summary: Arc<TableSummary>,
+        schema: Arc<Schema>,
         overlapped_files: Vec<ParquetFileWithTombstone>,
     ) -> Result<Vec<CompactedData>> {
         debug!("compact {} overlapped files", overlapped_files.len());
@@ -609,6 +628,8 @@ impl Compactor {
                 f.to_queryable_parquet_chunk(
                     Arc::clone(&self.object_store),
                     partition_info.table_name.clone(),
+                    Arc::clone(&table_summary),
+                    Arc::clone(&schema),
                 )
             })
             .collect();
@@ -1153,7 +1174,9 @@ mod tests {
             .await
             .unwrap();
         // should have 2 non-deleted level_0 files. The original file was marked deleted and not counted
-        let mut files = catalog.list_by_table_not_to_delete(table.table.id).await;
+        let mut files = catalog
+            .list_by_table_not_to_delete_with_metadata(table.table.id)
+            .await;
         assert_eq!(files.len(), 2);
         // 2 newly created level-1 files as the result of compaction
         assert_eq!((files[0].id.get(), files[0].compaction_level), (2, 1));
@@ -1355,7 +1378,9 @@ mod tests {
             .unwrap();
 
         // Should have 3 non-soft-deleted files: pf1 not compacted and stay, and 2 newly created after compacting pf2, pf3, pf4
-        let mut files = catalog.list_by_table_not_to_delete(table.table.id).await;
+        let mut files = catalog
+            .list_by_table_not_to_delete_with_metadata(table.table.id)
+            .await;
         assert_eq!(files.len(), 3);
         // pf1 upgraded to level 1
         assert_eq!((files[0].id.get(), files[0].compaction_level), (1, 1));
@@ -1434,13 +1459,18 @@ mod tests {
         let ns = catalog.create_namespace("ns").await;
         let sequencer = ns.create_sequencer(1).await;
         let table = ns.create_table("table").await;
-        let parquet_file = table
+        let partition = table
             .with_sequencer(&sequencer)
             .create_partition("part")
-            .await
+            .await;
+        let (parquet_file, _metadata) = partition
             .create_parquet_file_with_min_max(&lp, 1, 1, 8000, 20000)
             .await
-            .parquet_file;
+            .parquet_file
+            .split_off_metadata();
+
+        let partition_info = catalog.partition_info(partition.partition.id).await;
+        let table_info = catalog.table_info(table.table.id).await;
 
         let compactor = Compactor::new(
             vec![sequencer.sequencer.id],
@@ -1455,7 +1485,15 @@ mod tests {
 
         // ------------------------------------------------
         // no files provided
-        let result = compactor.compact(vec![]).await.unwrap();
+        let result = compactor
+            .compact(
+                &partition_info,
+                Arc::clone(&table_info.summary),
+                Arc::clone(&table_info.schema),
+                vec![],
+            )
+            .await
+            .unwrap();
         assert!(result.is_empty());
 
         // ------------------------------------------------
@@ -1465,7 +1503,15 @@ mod tests {
             tombstones: vec![],
         };
         // Nothing compacted for one file without tombstones
-        let result = compactor.compact(vec![pf.clone()]).await.unwrap();
+        let result = compactor
+            .compact(
+                &partition_info,
+                Arc::clone(&table_info.summary),
+                Arc::clone(&table_info.schema),
+                vec![pf.clone()],
+            )
+            .await
+            .unwrap();
         assert!(result.is_empty());
 
         // ------------------------------------------------
@@ -1477,7 +1523,15 @@ mod tests {
         pf.add_tombstones(vec![tombstone.tombstone.clone()]);
 
         // should have compacted data
-        let batches = compactor.compact(vec![pf]).await.unwrap();
+        let batches = compactor
+            .compact(
+                &partition_info,
+                Arc::clone(&table_info.summary),
+                Arc::clone(&table_info.schema),
+                vec![pf],
+            )
+            .await
+            .unwrap();
         // 2 sets based on the split rule
         assert_eq!(batches.len(), 2);
         // Data: row tag1=VT was removed
@@ -1530,14 +1584,19 @@ mod tests {
             .with_sequencer(&sequencer)
             .create_partition("part")
             .await;
-        let parquet_file1 = partition
+        let (parquet_file1, _metadata) = partition
             .create_parquet_file_with_min_max(&lp1, 1, 5, 8000, 20000)
             .await
-            .parquet_file;
-        let parquet_file2 = partition
+            .parquet_file
+            .split_off_metadata();
+        let (parquet_file2, _metadata) = partition
             .create_parquet_file_with_min_max(&lp2, 10, 15, 6000, 25000)
             .await
-            .parquet_file;
+            .parquet_file
+            .split_off_metadata();
+
+        let partition_info = catalog.partition_info(partition.partition.id).await;
+        let table_info = catalog.table_info(table.table.id).await;
 
         let compactor = Compactor::new(
             vec![sequencer.sequencer.id],
@@ -1566,7 +1625,15 @@ mod tests {
         };
 
         // Compact them
-        let batches = compactor.compact(vec![pf1, pf2]).await.unwrap();
+        let batches = compactor
+            .compact(
+                &partition_info,
+                Arc::clone(&table_info.summary),
+                Arc::clone(&table_info.schema),
+                vec![pf1, pf2],
+            )
+            .await
+            .unwrap();
         // 2 sets based on the split rule
         assert_eq!(batches.len(), 2);
 
@@ -1630,18 +1697,24 @@ mod tests {
             .await;
         // Sequence numbers are important here.
         // Time/sequence order from small to large: parquet_file_1, parquet_file_2, parquet_file_3
-        let parquet_file1 = partition
+        let (parquet_file1, _metadata) = partition
             .create_parquet_file_with_min_max(&lp1, 1, 5, 8000, 20000)
             .await
-            .parquet_file;
-        let parquet_file2 = partition
+            .parquet_file
+            .split_off_metadata();
+        let (parquet_file2, _metadata) = partition
             .create_parquet_file_with_min_max(&lp2, 10, 15, 6000, 25000)
             .await
-            .parquet_file;
-        let parquet_file3 = partition
+            .parquet_file
+            .split_off_metadata();
+        let (parquet_file3, _metadata) = partition
             .create_parquet_file_with_min_max(&lp3, 20, 25, 6000, 8000)
             .await
-            .parquet_file;
+            .parquet_file
+            .split_off_metadata();
+
+        let partition_info = catalog.partition_info(partition.partition.id).await;
+        let table_info = catalog.table_info(table.table.id).await;
 
         let compactor = Compactor::new(
             vec![sequencer.sequencer.id],
@@ -1676,7 +1749,12 @@ mod tests {
 
         // Compact them
         let batches = compactor
-            .compact(vec![pf1.clone(), pf2.clone(), pf3.clone()])
+            .compact(
+                &partition_info,
+                Arc::clone(&table_info.summary),
+                Arc::clone(&table_info.schema),
+                vec![pf1.clone(), pf2.clone(), pf3.clone()],
+            )
             .await
             .unwrap();
 
@@ -1736,7 +1814,6 @@ mod tests {
             max_time: Timestamp::new(max_time),
             to_delete: None,
             file_size_bytes,
-            parquet_metadata: vec![],
             row_count: 0,
             compaction_level: INITIAL_COMPACTION_LEVEL, // level of file of new writes
             created_at: Timestamp::new(1),
@@ -1768,14 +1845,18 @@ mod tests {
             .create_partition("part")
             .await;
         // 2 files with same min_sequence_number
-        let pf1 = partition
+        let (pf1, _metadata) = partition
             .create_parquet_file_with_min_max(&lp1, 1, 5, 8000, 20000)
             .await
-            .parquet_file;
-        let pf2 = partition
+            .parquet_file
+            .split_off_metadata();
+        let (pf2, _metadata) = partition
             .create_parquet_file_with_min_max(&lp2, 1, 5, 28000, 35000)
             .await
-            .parquet_file;
+            .parquet_file
+            .split_off_metadata();
+
+        let table_info = catalog.table_info(table.table.id).await;
 
         // Build 2 QueryableParquetChunks
         let pt1 = ParquetFileWithTombstone {
@@ -1790,10 +1871,14 @@ mod tests {
         let pc1 = pt1.to_queryable_parquet_chunk(
             Arc::clone(&catalog.object_store),
             table.table.name.clone(),
+            Arc::clone(&table_info.summary),
+            Arc::clone(&table_info.schema),
         );
         let pc2 = pt2.to_queryable_parquet_chunk(
             Arc::clone(&catalog.object_store),
             table.table.name.clone(),
+            Arc::clone(&table_info.summary),
+            Arc::clone(&table_info.schema),
         );
 
         // Vector of chunks
@@ -2214,11 +2299,7 @@ mod tests {
             ..p1.clone()
         };
         let pf1 = txn.parquet_files().create(p1).await.unwrap();
-        let pf1_metadata = txn.parquet_files().parquet_metadata(pf1.id).await.unwrap();
-        let pf1 = ParquetFile::new(pf1, pf1_metadata);
         let pf2 = txn.parquet_files().create(p2).await.unwrap();
-        let pf2_metadata = txn.parquet_files().parquet_metadata(pf2.id).await.unwrap();
-        let pf2 = ParquetFile::new(pf2, pf2_metadata);
 
         let parquet_files = vec![pf1.clone(), pf2.clone()];
         let groups = vec![

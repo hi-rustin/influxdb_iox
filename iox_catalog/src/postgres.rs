@@ -14,7 +14,7 @@ use data_types2::{
     Column, ColumnType, KafkaPartition, KafkaTopic, KafkaTopicId, Namespace, NamespaceId,
     ParquetFile, ParquetFileId, ParquetFileParams, ParquetFileWithMetadata, Partition, PartitionId,
     PartitionInfo, ProcessedTombstone, QueryPool, QueryPoolId, SequenceNumber, Sequencer,
-    SequencerId, Table, TableId, TablePartition, Timestamp, Tombstone, TombstoneId,
+    SequencerId, Table, TableId, TableInfo, TablePartition, Timestamp, Tombstone, TombstoneId,
 };
 use observability_deps::tracing::{info, warn};
 use sqlx::{migrate::Migrator, postgres::PgPoolOptions, Acquire, Executor, Postgres, Row};
@@ -823,6 +823,10 @@ LEFT JOIN (
         let info = rec.map_err(|e| Error::SqlxError { source: e })?;
 
         Ok(Some(info))
+    }
+
+    async fn table_info_by_id(&mut self, table_id: TableId) -> Result<Option<TableInfo>> {
+        unimplemented!();
     }
 }
 

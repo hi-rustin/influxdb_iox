@@ -3,7 +3,7 @@ use crate::{
     storage::Storage,
 };
 use data_types::{
-    partition_metadata::{Statistics, TableSummary},
+    partition_metadata::TableSummary,
     timestamp::{TimestampMinMax, TimestampRange},
 };
 use data_types2::{ParquetFile, ParquetFileWithMetadata};
@@ -12,7 +12,7 @@ use iox_object_store::{IoxObjectStore, ParquetFilePath};
 use observability_deps::tracing::*;
 use predicate::Predicate;
 use schema::selection::Selection;
-use schema::{Schema, TIME_COLUMN_NAME};
+use schema::Schema;
 use snafu::{ResultExt, Snafu};
 use std::{collections::BTreeSet, mem, sync::Arc};
 
@@ -80,90 +80,60 @@ impl ChunkMetrics {
 #[derive(Debug)]
 pub struct ParquetChunk {
     /// Meta data of the table
-    table_summary: Arc<TableSummary>,
+    pub(crate) table_summary: Arc<TableSummary>,
 
     /// Schema that goes with this table's parquet file
-    schema: Arc<Schema>,
+    pub(crate) schema: Arc<Schema>,
 
-    /// min/max time range of this table's parquet file
-    /// (extracted from TableSummary), if known
-    timestamp_min_max: Option<TimestampMinMax>,
+    /// min/max time range of this table's parquet file, extracted from Parquet File catalog info
+    pub(crate) timestamp_min_max: TimestampMinMax,
 
     /// Persists the parquet file within a database's relative path
-    iox_object_store: Arc<IoxObjectStore>,
+    pub(crate) iox_object_store: Arc<IoxObjectStore>,
 
     /// Path in the database's object store.
-    path: ParquetFilePath,
+    pub(crate) path: ParquetFilePath,
 
     /// Size of the data, in object store
-    file_size_bytes: usize,
-
-    /// Parquet metadata that can be used checkpoint the catalog state.
-    parquet_metadata: Arc<IoxParquetMetaData>,
+    pub(crate) file_size_bytes: usize,
 
     /// Number of rows
-    rows: usize,
+    pub(crate) rows: usize,
 
     #[allow(dead_code)]
-    metrics: ChunkMetrics,
+    pub(crate) metrics: ChunkMetrics,
 }
 
 impl ParquetChunk {
-    /// Creates new chunk from given parquet metadata.
+    /// Creates new chunk from given catalog metadata.
     pub fn new(
-        path: &ParquetFilePath,
-        iox_object_store: Arc<IoxObjectStore>,
-        file_size_bytes: usize,
-        parquet_metadata: Arc<IoxParquetMetaData>,
-        metrics: ChunkMetrics,
-    ) -> Result<Self> {
-        let decoded = parquet_metadata
-            .decode()
-            .context(MetadataDecodeFailedSnafu { path })?;
-        let schema = decoded
-            .read_schema()
-            .context(SchemaReadFailedSnafu { path })?;
-        let columns = decoded
-            .read_statistics(&schema)
-            .context(StatisticsReadFailedSnafu { path })?;
-        let table_summary = TableSummary { columns };
-        let rows = decoded.row_count();
-
-        Ok(Self::new_from_parts(
-            Arc::new(table_summary),
-            schema,
-            path,
-            iox_object_store,
-            file_size_bytes,
-            parquet_metadata,
-            rows,
-            metrics,
-        ))
-    }
-
-    /// Creates a new chunk from given parts w/o parsing anything from the provided parquet
-    /// metadata.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new_from_parts(
+        parquet_file: &ParquetFile,
         table_summary: Arc<TableSummary>,
         schema: Arc<Schema>,
-        path: &ParquetFilePath,
         iox_object_store: Arc<IoxObjectStore>,
-        file_size_bytes: usize,
-        parquet_metadata: Arc<IoxParquetMetaData>,
-        rows: usize,
         metrics: ChunkMetrics,
     ) -> Self {
-        let timestamp_min_max = extract_range(&table_summary);
+        let timestamp_min_max =
+            TimestampMinMax::new(parquet_file.min_time.get(), parquet_file.max_time.get());
+
+        let path = ParquetFilePath::new_new_gen(
+            parquet_file.namespace_id,
+            parquet_file.table_id,
+            parquet_file.sequencer_id,
+            parquet_file.partition_id,
+            parquet_file.object_store_id,
+        );
+
+        let file_size_bytes = parquet_file.file_size_bytes as usize;
+        let rows = parquet_file.row_count as usize;
 
         Self {
             table_summary,
             schema,
             timestamp_min_max,
             iox_object_store,
-            path: path.into(),
+            path,
             file_size_bytes,
-            parquet_metadata,
             rows,
             metrics,
         }
@@ -186,7 +156,6 @@ impl ParquetChunk {
             + self.table_summary.size()
             + mem::size_of_val(&self.schema.as_ref())
             + mem::size_of_val(&self.path)
-            + self.parquet_metadata.size()
     }
 
     /// Infallably return the full schema (for all columns) for this chunk
@@ -197,14 +166,10 @@ impl ParquetChunk {
     // Return true if this chunk contains values within the time
     // range, or if the range is `None`.
     pub fn has_timerange(&self, timestamp_range: Option<&TimestampRange>) -> bool {
-        match (self.timestamp_min_max, timestamp_range) {
-            (Some(timestamp_min_max), Some(timestamp_range)) => {
-                timestamp_min_max.overlaps(*timestamp_range)
-            }
-            // If this chunk doesn't have a time column it can't match
-            (None, Some(_)) => false,
+        match timestamp_range {
+            Some(timestamp_range) => self.timestamp_min_max.overlaps(*timestamp_range),
             // If there no range specified,
-            (_, None) => true,
+            None => true,
         }
     }
 
@@ -252,24 +217,8 @@ impl ParquetChunk {
     pub fn file_size_bytes(&self) -> usize {
         self.file_size_bytes
     }
-
-    /// Parquet metadata from the underlying file.
-    pub fn parquet_metadata(&self) -> Arc<IoxParquetMetaData> {
-        Arc::clone(&self.parquet_metadata)
-    }
 }
 
-/// Extracts min/max values of the timestamp column, from the TableSummary, if possible
-fn extract_range(table_summary: &TableSummary) -> Option<TimestampMinMax> {
-    table_summary.column(TIME_COLUMN_NAME).and_then(|c| {
-        if let Statistics::I64(s) = &c.stats {
-            if let (Some(min), Some(max)) = (s.min, s.max) {
-                return Some(TimestampMinMax::new(min, max));
-            }
-        }
-        None
-    })
-}
 // Parquet file with decoded metadata.
 #[derive(Debug)]
 pub struct DecodedParquetFile {
@@ -295,32 +244,4 @@ impl DecodedParquetFile {
             iox_metadata,
         }
     }
-}
-
-/// Create parquet chunk.
-pub fn new_parquet_chunk(
-    decoded_parquet_file: &DecodedParquetFile,
-    metrics: ChunkMetrics,
-    iox_object_store: Arc<IoxObjectStore>,
-) -> ParquetChunk {
-    let iox_metadata = &decoded_parquet_file.iox_metadata;
-    let path = ParquetFilePath::new_new_gen(
-        iox_metadata.namespace_id,
-        iox_metadata.table_id,
-        iox_metadata.sequencer_id,
-        iox_metadata.partition_id,
-        iox_metadata.object_store_id,
-    );
-
-    let parquet_file = &decoded_parquet_file.parquet_file;
-    let file_size_bytes = parquet_file.file_size_bytes as usize;
-
-    ParquetChunk::new(
-        &path,
-        iox_object_store,
-        file_size_bytes,
-        Arc::clone(&decoded_parquet_file.parquet_metadata),
-        metrics,
-    )
-    .expect("cannot create chunk")
 }

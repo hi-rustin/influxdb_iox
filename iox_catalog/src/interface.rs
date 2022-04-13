@@ -5,7 +5,7 @@ use data_types2::{
     Column, ColumnSchema, ColumnType, KafkaPartition, KafkaTopic, KafkaTopicId, Namespace,
     NamespaceId, NamespaceSchema, ParquetFile, ParquetFileId, ParquetFileParams,
     ParquetFileWithMetadata, Partition, PartitionId, PartitionInfo, ProcessedTombstone, QueryPool,
-    QueryPoolId, SequenceNumber, Sequencer, SequencerId, Table, TableId, TablePartition,
+    QueryPoolId, SequenceNumber, Sequencer, SequencerId, Table, TableId, TableInfo, TablePartition,
     TableSchema, Timestamp, Tombstone, TombstoneId,
 };
 use snafu::{OptionExt, Snafu};
@@ -314,6 +314,9 @@ pub trait TableRepo: Send + Sync {
         namespace_id: NamespaceId,
         table_name: &str,
     ) -> Result<Option<TablePersistInfo>>;
+
+    /// Get table summary and schema
+    async fn table_info_by_id(&mut self, table_id: TableId) -> Result<Option<TableInfo>>;
 }
 
 /// Information for a table's persistence information for a specific sequencer from the catalog

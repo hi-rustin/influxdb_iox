@@ -15,7 +15,7 @@ use data_types2::{
     Column, ColumnId, ColumnType, KafkaPartition, KafkaTopic, KafkaTopicId, Namespace, NamespaceId,
     ParquetFile, ParquetFileId, ParquetFileParams, ParquetFileWithMetadata, Partition, PartitionId,
     PartitionInfo, ProcessedTombstone, QueryPool, QueryPoolId, SequenceNumber, Sequencer,
-    SequencerId, Table, TableId, TablePartition, Timestamp, Tombstone, TombstoneId,
+    SequencerId, Table, TableId, TableInfo, TablePartition, Timestamp, Tombstone, TombstoneId,
 };
 use observability_deps::tracing::warn;
 use std::{
@@ -464,6 +464,10 @@ impl TableRepo for MemTxn {
         }
 
         Ok(None)
+    }
+
+    async fn table_info_by_id(&mut self, table_id: TableId) -> Result<Option<TableInfo>> {
+        unimplemented!();
     }
 }
 

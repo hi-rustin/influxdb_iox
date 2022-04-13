@@ -4,10 +4,14 @@ use crate::storage::Storage;
 use crate::test_utils::{
     create_partition_and_database_checkpoint, make_iox_object_store, make_record_batch, TestSize,
 };
-use data_types::chunk_metadata::{ChunkAddr, ChunkId, ChunkOrder};
-use data_types::partition_metadata::{PartitionAddr, TableSummary};
+use data_types::{
+    chunk_metadata::{ChunkAddr, ChunkId, ChunkOrder},
+    partition_metadata::{PartitionAddr, Statistics, TableSummary},
+    timestamp::TimestampMinMax,
+};
 use datafusion_util::MemoryStream;
 use iox_object_store::IoxObjectStore;
+use schema::TIME_COLUMN_NAME;
 use std::sync::Arc;
 use time::Time;
 
@@ -129,19 +133,33 @@ impl ChunkGenerator {
             .unwrap();
 
         written_result.as_ref()?;
-        let (path, file_size_bytes, parquet_metadata) = written_result.unwrap();
+        let (path, file_size_bytes, _parquet_metadata) = written_result.unwrap();
 
-        let chunk = ParquetChunk::new_from_parts(
-            Arc::new(table_summary),
-            Arc::new(schema),
-            &path,
-            Arc::clone(&self.iox_object_store),
+        let timestamp_min_max = extract_range(&table_summary).unwrap();
+
+        let chunk = ParquetChunk {
+            table_summary: Arc::new(table_summary),
+            schema: Arc::new(schema),
+            timestamp_min_max,
+            iox_object_store: Arc::clone(&self.iox_object_store),
+            path,
             file_size_bytes,
-            Arc::new(parquet_metadata),
             rows,
-            ChunkMetrics::new_unregistered(),
-        );
+            metrics: ChunkMetrics::new_unregistered(),
+        };
 
         Some((chunk, metadata))
     }
+}
+
+/// Extracts min/max values of the timestamp column, from the TableSummary, if possible
+fn extract_range(table_summary: &TableSummary) -> Option<TimestampMinMax> {
+    table_summary.column(TIME_COLUMN_NAME).and_then(|c| {
+        if let Statistics::I64(s) = &c.stats {
+            if let (Some(min), Some(max)) = (s.min, s.max) {
+                return Some(TimestampMinMax::new(min, max));
+            }
+        }
+        None
+    })
 }

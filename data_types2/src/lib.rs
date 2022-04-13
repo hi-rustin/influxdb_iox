@@ -431,6 +431,15 @@ impl TableSchema {
     }
 }
 
+/// Table summary and schema
+#[derive(Debug, Clone, PartialEq)]
+pub struct TableInfo {
+    /// Summary
+    pub summary: Arc<TableSummary>,
+    /// Schema
+    pub schema: Arc<Schema>,
+}
+
 /// Data object for a column
 #[derive(Debug, Clone, sqlx::FromRow, Eq, PartialEq)]
 pub struct Column {

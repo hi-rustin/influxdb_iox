@@ -10,7 +10,7 @@ use data_types2::{
     Column, ColumnType, KafkaPartition, KafkaTopic, KafkaTopicId, Namespace, NamespaceId,
     ParquetFile, ParquetFileId, ParquetFileParams, ParquetFileWithMetadata, Partition, PartitionId,
     PartitionInfo, ProcessedTombstone, QueryPool, QueryPoolId, SequenceNumber, Sequencer,
-    SequencerId, Table, TableId, TablePartition, Timestamp, Tombstone, TombstoneId,
+    SequencerId, Table, TableId, TableInfo, TablePartition, Timestamp, Tombstone, TombstoneId,
 };
 use metric::{Metric, U64Histogram, U64HistogramOptions};
 use std::{fmt::Debug, sync::Arc};
@@ -213,6 +213,7 @@ decorate!(
         "table_get_by_namespace_and_name" = get_by_namespace_and_name(&mut self, namespace_id: NamespaceId, name: &str) -> Result<Option<Table>>;
         "table_list_by_namespace_id" = list_by_namespace_id(&mut self, namespace_id: NamespaceId) -> Result<Vec<Table>>;
         "get_table_persist_info" = get_table_persist_info(&mut self, sequencer_id: SequencerId, namespace_id: NamespaceId, table_name: &str) -> Result<Option<TablePersistInfo>>;
+        "table_info_by_id" = table_info_by_id(&mut self, table_id: TableId) -> Result<Option<TableInfo>>;
     ]
 );
 

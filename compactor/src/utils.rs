@@ -3,15 +3,16 @@
 use crate::query::QueryableParquetChunk;
 use arrow::record_batch::RecordBatch;
 use data_types2::{
-    ParquetFile, ParquetFileId, ParquetFileParams, Timestamp, Tombstone, TombstoneId,
+    ParquetFile, ParquetFileId, ParquetFileParams, TableSummary, Timestamp, Tombstone, TombstoneId,
 };
 use iox_object_store::IoxObjectStore;
 use object_store::DynObjectStore;
 use observability_deps::tracing::*;
 use parquet_file2::{
-    chunk::{new_parquet_chunk, ChunkMetrics},
+    chunk::{ChunkMetrics, ParquetChunk},
     metadata::{IoxMetadata, IoxParquetMetaData},
 };
+use schema::Schema;
 use std::{
     collections::{BTreeMap, HashSet},
     sync::Arc,
@@ -89,16 +90,20 @@ impl ParquetFileWithTombstone {
         &self,
         object_store: Arc<DynObjectStore>,
         table_name: String,
+        table_summary: Arc<TableSummary>,
+        schema: Arc<Schema>,
     ) -> QueryableParquetChunk {
         let root_path = IoxObjectStore::root_path_for(&*object_store, self.data.object_store_id);
         let iox_object_store = IoxObjectStore::existing(object_store, root_path);
-        let parquet_chunk = new_parquet_chunk(
+        let parquet_chunk = ParquetChunk::new(
             &self.data,
-            ChunkMetrics::new_unregistered(), // TODO: need to add metrics
+            table_summary,
+            schema,
             Arc::new(iox_object_store),
+            ChunkMetrics::new_unregistered(), // TODO: need to add metrics
         );
 
-        let parquet_file = self.data;
+        let parquet_file = &self.data;
 
         debug!(
             parquet_file_id=?parquet_file.id,

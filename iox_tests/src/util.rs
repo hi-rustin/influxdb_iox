@@ -7,8 +7,9 @@ use arrow::{
 use bytes::Bytes;
 use data_types2::{
     Column, ColumnType, KafkaPartition, KafkaTopic, Namespace, ParquetFile, ParquetFileId,
-    ParquetFileParams, ParquetFileWithMetadata, Partition, QueryPool, SequenceNumber, Sequencer,
-    SequencerId, Table, TableId, Timestamp, Tombstone, TombstoneId,
+    ParquetFileParams, ParquetFileWithMetadata, Partition, PartitionId, PartitionInfo, QueryPool,
+    SequenceNumber, Sequencer, SequencerId, Table, TableId, TableInfo, Timestamp, Tombstone,
+    TombstoneId,
 };
 use iox_catalog::{
     interface::{Catalog, INITIAL_COMPACTION_LEVEL},
@@ -212,6 +213,30 @@ impl TestCatalog {
             .parquet_files()
             .parquet_metadata(parquet_file_id)
             .await
+            .unwrap()
+    }
+
+    /// Get a partition's info
+    pub async fn partition_info(&self, partition_id: PartitionId) -> PartitionInfo {
+        self.catalog
+            .repositories()
+            .await
+            .partitions()
+            .partition_info_by_id(partition_id)
+            .await
+            .unwrap()
+            .unwrap()
+    }
+
+    /// Get a table's info
+    pub async fn table_info(&self, table_id: TableId) -> TableInfo {
+        self.catalog()
+            .repositories()
+            .await
+            .tables()
+            .table_info_by_id(table_id)
+            .await
+            .unwrap()
             .unwrap()
     }
 }
