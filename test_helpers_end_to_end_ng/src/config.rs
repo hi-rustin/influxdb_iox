@@ -131,8 +131,8 @@ impl TestConfig {
     fn with_default_ingester_options(self) -> Self {
         self.with_env("INFLUXDB_IOX_PAUSE_INGEST_SIZE_BYTES", "20")
             .with_env("INFLUXDB_IOX_PERSIST_MEMORY_THRESHOLD_BYTES", "10")
-            .with_env("INFLUXDB_IOX_WRITE_BUFFER_PARTITION_RANGE_START", "0")
-            .with_env("INFLUXDB_IOX_WRITE_BUFFER_PARTITION_RANGE_END", "0")
+            .with_env("INFLUXDB_IOX_WRITE_BUFFER_KAFKA_PARTITION_RANGE_START", "0")
+            .with_env("INFLUXDB_IOX_WRITE_BUFFER_KAFKA_PARTITION_RANGE_END", "0")
     }
 
     /// Adds the ingester addresses
@@ -182,10 +182,7 @@ impl TestConfig {
     /// Configures the write buffer to use the specified kafka partition count
     fn with_kafka_partition_count(self, kafka_partition_count: usize) -> Self {
         self.with_env(
-            // change to:
-            // "INFLUXDB_IOX_WRITE_BUFFER_KAFAKA_PARTITION_COUNT,
-            // https://github.com/influxdata/influxdb_iox/issues/4311
-            "INFLUXDB_IOX_WRITE_BUFFER_AUTO_CREATE_TOPICS",
+            "INFLUXDB_IOX_WRITE_BUFFER_KAFKA_PARTITION_COUNT",
             kafka_partition_count.to_string(),
         )
     }
@@ -201,10 +198,7 @@ impl TestConfig {
         // copy the the directory, if any
         self.write_buffer_dir = other.write_buffer_dir.clone();
         self.copy_env("INFLUXDB_IOX_WRITE_BUFFER_TYPE", other)
-            // change to:
-            // "INFLUXDB_IOX_WRITE_BUFFER_KAFAKA_PARTITION_COUNT,
-            // https://github.com/influxdata/influxdb_iox/issues/4311
-            .copy_env("INFLUXDB_IOX_WRITE_BUFFER_AUTO_CREATE_TOPICS", other)
+            .copy_env("INFLUXDB_IOX_WRITE_BUFFER_KAFKA_PARTITION_COUNT", other)
             .copy_env("INFLUXDB_IOX_WRITE_BUFFER_ADDR", other)
     }
 

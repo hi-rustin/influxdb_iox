@@ -44,13 +44,6 @@ pub struct WriteBufferConfig {
     )]
     pub(crate) connection_config: Vec<String>,
 
-    /// DEPRECATED: The number of topics to create automatically, if any. Default is to not create any topics.
-    #[clap(
-        long = "--write-buffer-auto-create-topics",
-        env = "INFLUXDB_IOX_WRITE_BUFFER_AUTO_CREATE_TOPICS"
-    )]
-    auto_create_topics: Option<NonZeroU32>,
-
     /// The total number of kafka partitions to use in this write
     /// buffer. If any of the kafka partitions do not yet exist, IOx
     /// will create them.
@@ -134,19 +127,7 @@ impl WriteBufferConfig {
 
     /// Get the number of kafka partitions the write buffer should auto create
     pub fn kafka_partition_count(&self) -> Option<NonZeroU32> {
-        match (
-            self.auto_create_topics.is_some(),
-            self.kafka_partition_count.is_some(),
-        ) {
-            // this code is temporary as we roll out the change, so don't worry about nice error handling
-            // https://github.com/influxdata/influxdb_iox/issues/4311
-            (true, true) => {
-                panic!("Can not specify both auto create topics and kafka partition count")
-            }
-            (true, false) => self.auto_create_topics,
-            (false, true) => self.kafka_partition_count,
-            (false, false) => None,
-        }
+        self.kafka_partition_count
     }
 
     /// Set the write buffer config's auto create topics.
@@ -186,63 +167,5 @@ mod tests {
             (String::from("so"), String::from("many=args")),
         ]);
         assert_eq!(actual, expected);
-    }
-
-    #[test]
-    fn test_kafka_partition_count_backwards_compatible() {
-        let cfg = WriteBufferConfig::try_parse_from([
-            "my_binary",
-            "--write-buffer",
-            "kafka",
-            "--write-buffer-addr",
-            "localhost:1234",
-            "--write-buffer-kafka-partition-count",
-            "4",
-        ])
-        .unwrap();
-        assert_eq!(
-            cfg.kafka_partition_count(),
-            Some(NonZeroU32::new(4).unwrap())
-        );
-    }
-
-    #[test]
-    fn test_kafka_partition_count_legacy() {
-        // Test legacy option
-        let cfg = WriteBufferConfig::try_parse_from([
-            "my_binary",
-            "--write-buffer",
-            "kafka",
-            "--write-buffer-addr",
-            "localhost:1234",
-            "--write-buffer-auto-create-topics",
-            "4",
-        ])
-        .unwrap();
-        assert_eq!(
-            cfg.kafka_partition_count(),
-            Some(NonZeroU32::new(4).unwrap())
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "Can not specify both auto create topics and kafka partition count")]
-    fn test_kafka_partition_count_legacy_bad() {
-        let cfg = WriteBufferConfig::try_parse_from([
-            "my_binary",
-            "--write-buffer",
-            "kafka",
-            "--write-buffer-addr",
-            "localhost:1234",
-            "--write-buffer-auto-create-topics",
-            "4",
-            // can't pass both
-            "--write-buffer-kafka-partition-count",
-            "4",
-        ])
-        .unwrap();
-
-        // panic!
-        cfg.kafka_partition_count();
     }
 }
