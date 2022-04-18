@@ -100,22 +100,16 @@ impl WriteInfoService for WriteInfoServiceImpl {
             .into_iter()
             .map(|(kafka_partition_id, progress)| {
                 let status = write_summary
-                    .kafka_partition_write_status(kafka_partition_id, &progress)
+                    .write_status(kafka_partition_id, &progress)
                     .map_err(|e| tonic::Status::invalid_argument(e.to_string()))?;
 
                 let status = match status {
                     KafkaPartitionWriteStatus::KafkaPartitionUnknown => {
-                        proto::KafkaPartitionStatus::StatusUnknown
+                        proto::KafkaPartitionStatus::Unknown
                     }
-                    KafkaPartitionWriteStatus::Durable => {
-                        proto::KafkaPartitionStatus::StatusDurable
-                    }
-                    KafkaPartitionWriteStatus::Readable => {
-                        proto::KafkaPartitionStatus::StatusReadable
-                    }
-                    KafkaPartitionWriteStatus::Persisted => {
-                        proto::KafkaPartitionStatus::StatusPersisted
-                    }
+                    KafkaPartitionWriteStatus::Durable => proto::KafkaPartitionStatus::Durable,
+                    KafkaPartitionWriteStatus::Readable => proto::KafkaPartitionStatus::Readable,
+                    KafkaPartitionWriteStatus::Persisted => proto::KafkaPartitionStatus::Persisted,
                 };
 
                 Ok(proto::KafkaPartitionInfo {

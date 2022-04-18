@@ -1,16 +1,14 @@
 //! Client helpers for writing end to end ng tests
-use std::collections::HashMap;
 use std::time::Duration;
 
 use arrow::record_batch::RecordBatch;
-use futures::{stream::FuturesUnordered, StreamExt};
 use http::Response;
 use hyper::{Body, Client, Request};
 
 use influxdb_iox_client::connection::Connection;
 use influxdb_iox_client::flight::generated_types::ReadInfo;
 use influxdb_iox_client::write_info::generated_types::{
-    GetWriteInfoResponse, KafkaPartitionInfo, KafkaPartitionStatus,
+    GetWriteInfoResponse, KafkaPartitionStatus,
 };
 
 /// Writes the line protocol to the write_base/api/v2/write endpoint (typically on the router)
@@ -61,7 +59,6 @@ pub async fn token_info(
         .get_write_info(write_token.as_ref())
         .await
 }
-
 
 /// returns true if the write for this token is persisted, false if it
 /// is not persisted. panic's on error
@@ -151,7 +148,7 @@ pub fn all_readable(res: &GetWriteInfoResponse) -> bool {
     res.kafka_partition_infos.iter().all(|info| {
         matches!(
             info.status(),
-            KafkaPartitionStatus::StatusReadable | KafkaPartitionStatus::StatusPersisted
+            KafkaPartitionStatus::Readable | KafkaPartitionStatus::Persisted
         )
     })
 }
@@ -162,7 +159,7 @@ pub fn all_readable(res: &GetWriteInfoResponse) -> bool {
 pub fn all_persisted(res: &GetWriteInfoResponse) -> bool {
     res.kafka_partition_infos
         .iter()
-        .all(|info| matches!(info.status(), KafkaPartitionStatus::StatusPersisted))
+        .all(|info| matches!(info.status(), KafkaPartitionStatus::Persisted))
 }
 
 /// Runs a query using the flight API on the specified connection

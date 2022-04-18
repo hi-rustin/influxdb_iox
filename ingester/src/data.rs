@@ -1710,7 +1710,7 @@ mod tests {
             .unwrap();
 
         // check progresses
-        let progresses = data.progresses(vec![kafka_partition]).await.unwrap();
+        let progresses = data.progresses(vec![kafka_partition]).await;
         let mut expected_progresses = BTreeMap::new();
         expected_progresses.insert(
             kafka_partition,
@@ -1794,7 +1794,7 @@ mod tests {
         );
 
         // check progresses after persist
-        let progresses = data.progresses(vec![kafka_partition]).await.unwrap();
+        let progresses = data.progresses(vec![kafka_partition]).await;
         let mut expected_progresses = BTreeMap::new();
         expected_progresses.insert(
             kafka_partition,

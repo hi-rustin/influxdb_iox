@@ -36,20 +36,20 @@ message KafkaPartitionInfo {
 // the state
 enum KafkaPartitionStatus {
   // Unspecified status, will result in an error.
-  STATUS_UNSPECIFIED = 0;
+  KAFKA_PARTITION_STATUS_UNSPECIFIED = 0;
 
   // The ingester has not yet processed data in this write
-  STATUS_DURABLE = 1;
+  KAFKA_PARTITION_STATUS_DURABLE = 1;
 
   // The ingester has processed the data in this write and it is
   // readable (will be included in a query response)?
-  STATUS_READABLE = 2;
+  KAFKA_PARTITION_STATUS_READABLE = 2;
 
   // The ingester has processed the data in this write and it is both
   // readable and completly persisted to parquet files.
-  STATUS_PERSISTED = 3;
+  KAFKA_PARTITION_STATUS_PERSISTED = 3;
 
   // The ingester does not have information about this kafka
   // partition
-  STATUS_UNKNOWN = 4;
+  KAFKA_PARTITION_STATUS_UNKNOWN = 4;
 }
