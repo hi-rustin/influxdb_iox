@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use data_types2::{KafkaPartition, SequenceNumber};
-use observability_deps::tracing::{debug, trace};
+use observability_deps::tracing::debug;
 
 /// Protobuf to/from conversion
 use generated_types::influxdata::iox::write_summary::v1 as proto;
@@ -38,6 +38,18 @@ pub struct WriteSummary {
     ///
     /// Note: BTreeMap to ensure the output is in a consistent order
     sequencers: BTreeMap<KafkaPartition, Vec<SequenceNumber>>,
+}
+
+pub enum KafkaPartitionWriteStatus {
+    /// Nothing is known about this write (e.g. it refers to a kafka
+    /// partition for which we have no information)
+    KafkaPartitionUnknown,
+    /// The data has not yet been processed by the ingester, and thus is unreadable
+    Durable,
+    /// The data is readable, but not yet persisted
+    Readable,
+    /// The data is both readable and persisted to parquet
+    Persisted,
 }
 
 impl WriteSummary {
@@ -108,75 +120,38 @@ impl WriteSummary {
     }
 
     /// Given the write described by this summary and the sequencer's
-    /// progress, returns:
-    ///
-    /// 1. `Ok(true) if the write is guaranteed to be readable
-    /// 2. `Ok(false) if the write is guaranteed to NOT be readable
-    /// 3. `Err` if a determination can not be made
-    ///
-    /// The progress may not contain information about the kafka
-    /// partition of interest, for example.
-    pub fn readable(
+    /// progress for a particular kafka partition, returns the status of that write
+    pub fn kafka_partition_write_status(
         &self,
-        progresses: &BTreeMap<KafkaPartition, SequencerProgress>,
-    ) -> Result<bool> {
-        let readable = self.check_progress(progresses, |sequence_number, progress| {
-            progress.readable(sequence_number)
-        });
-        trace!(?readable, ?progresses, ?self, "Checked readable");
-        readable
-    }
+        kafka_partition: KafkaPartition,
+        progress: &SequencerProgress,
+    ) -> Result<KafkaPartitionWriteStatus> {
+        let sequence_numbers = self
+            .sequencers
+            .get(&kafka_partition)
+            .context(UnknownKafkaPartitionSnafu { kafka_partition })?;
 
-    /// Given the write described by this summary and the sequencer's
-    /// progress, returns:
-    ///
-    /// 1. `Ok(true) if the write is guaranteed to be persisted to parquet
-    /// 2. `Ok(false) if the write is guaranteed to NOT be persisted to parquet
-    /// 3. `Err` if a determination can not be made
-    ///
-    /// The progress may not contain information about the kafka
-    /// partition of interest, for example.
-    pub fn persisted(
-        &self,
-        progresses: &BTreeMap<KafkaPartition, SequencerProgress>,
-    ) -> Result<bool> {
-        let persisted = self.check_progress(progresses, |sequence_number, progress| {
-            progress.persisted(sequence_number)
-        });
-        trace!(?persisted, ?progresses, ?self, "Checked persisted");
-        persisted
-    }
+        if progress.is_empty() {
+            return Ok(KafkaPartitionWriteStatus::KafkaPartitionUnknown);
+        }
 
-    /// returns Some(true) if f(kafka_partition, progress) returns
-    /// true for all kafka_partitions in self for the corresponding
-    /// progress, Some(false) if `f` ever returned false, and None if
-    /// there `progresses` does not have information about one of the
-    /// partitions
-    fn check_progress<F>(
-        &self,
-        progresses: &BTreeMap<KafkaPartition, SequencerProgress>,
-        f: F,
-    ) -> Result<bool>
-    where
-        F: Fn(SequenceNumber, &SequencerProgress) -> bool,
-    {
-        self.sequencers
+        let is_persisted = sequence_numbers
             .iter()
-            .map(|(&kafka_partition, sequence_numbers)| {
-                progresses
-                    .get(&kafka_partition)
-                    .map(|progress| {
-                        sequence_numbers
-                            .iter()
-                            .all(|sequence_number| f(*sequence_number, progress))
-                    })
-                    .context(UnknownKafkaPartitionSnafu { kafka_partition })
-            })
-            .collect::<Result<Vec<_>>>()
-            .map(|all_results| {
-                // were all invocations of f() true?
-                all_results.into_iter().all(|v| v)
-            })
+            .all(|sequence_number| progress.persisted(*sequence_number));
+
+        if is_persisted {
+            return Ok(KafkaPartitionWriteStatus::Persisted);
+        }
+
+        let is_readable = sequence_numbers
+            .iter()
+            .all(|sequence_number| progress.readable(*sequence_number));
+
+        if is_readable {
+            return Ok(KafkaPartitionWriteStatus::Readable);
+        }
+
+        Ok(KafkaPartitionWriteStatus::Durable)
     }
 }
 
