@@ -13,12 +13,6 @@ message GetWriteInfoRequest {
 }
 
 message GetWriteInfoResponse {
-  // was readable
-  reserved 1;
-
-  // was persisted
-  reserved 2;
-
   // Information for all partitions in this write
   repeated KafkaPartitionInfo kafka_partition_infos = 3;
 }
