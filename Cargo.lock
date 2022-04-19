@@ -773,6 +773,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmake"
+version = "0.1.48"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e8ad8cef104ac57b68b89df3208164d228503abbdce70f6880ffa3d970e7443a"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "colored"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1777,7 +1786,7 @@ dependencies = [
  "pbjson-types",
  "predicate",
  "prost 0.9.0",
- "prost-build",
+ "prost-build 0.10.1",
  "regex",
  "serde",
  "time 0.1.0",
@@ -1841,7 +1850,7 @@ dependencies = [
  "observability_deps",
  "paste",
  "prost 0.9.0",
- "prost-build",
+ "prost-build 0.10.1",
  "prost-types 0.9.0",
  "thiserror",
  "tokio",
@@ -1857,7 +1866,7 @@ name = "grpc-router-test-gen"
 version = "0.1.0"
 dependencies = [
  "prost 0.9.0",
- "prost-build",
+ "prost-build 0.10.1",
  "prost-types 0.9.0",
  "tonic 0.6.2",
  "tonic-build",
@@ -4146,7 +4155,7 @@ dependencies = [
  "pbjson 0.2.3",
  "pbjson-build 0.2.3",
  "prost 0.9.0",
- "prost-build",
+ "prost-build 0.9.0",
  "serde",
 ]
 
@@ -4330,7 +4339,7 @@ dependencies = [
  "nix",
  "parking_lot 0.11.2",
  "prost 0.9.0",
- "prost-build",
+ "prost-build 0.9.0",
  "prost-derive 0.9.0",
  "smallvec",
  "symbolic-demangle",
@@ -4354,7 +4363,7 @@ dependencies = [
  "once_cell",
  "parking_lot 0.12.0",
  "prost 0.9.0",
- "prost-build",
+ "prost-build 0.9.0",
  "prost-derive 0.9.0",
  "smallvec",
  "symbolic-demangle",
@@ -4535,6 +4544,28 @@ dependencies = [
  "petgraph",
  "prost 0.9.0",
  "prost-types 0.9.0",
+ "regex",
+ "tempfile",
+ "which",
+]
+
+[[package]]
+name = "prost-build"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "120fbe7988713f39d780a58cf1a7ef0d7ef66c6d87e5aa3438940c05357929f4"
+dependencies = [
+ "bytes",
+ "cfg-if",
+ "cmake",
+ "heck 0.4.0",
+ "itertools",
+ "lazy_static",
+ "log",
+ "multimap",
+ "petgraph",
+ "prost 0.10.0",
+ "prost-types 0.10.0",
  "regex",
  "tempfile",
  "which",
@@ -6454,7 +6485,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9403f1bafde247186684b230dc6f38b5cd514584e8bec1dd32514be4745fa757"
 dependencies = [
  "proc-macro2",
- "prost-build",
+ "prost-build 0.9.0",
  "quote",
  "syn",
 ]
